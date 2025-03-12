@@ -1,0 +1,36 @@
+{
+  "name": "@akron-finance/trala-stake",
+  "description": "AkronSwap",
+  "version": "1.0.0",
+  "engines": {
+    "node": ">=10"
+  },
+  "homepage": "https://akronswap.com",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/akron-finance/trala-stake"
+  },
+  "files": [
+    "build",
+    "contracts"
+  ],
+  "dependencies": {
+    "@openzeppelin/contracts": "3.1.0"
+  },
+  "devDependencies": {
+    "ethereum-waffle": "^2.5.1",
+    "ethereumjs-util": "^6.2.0",
+    "ncp": "^2.0.0",
+    "rimraf": "^3.0.0",
+    "solc": "0.6.12",
+    "ts-node": "^8.5.4",
+    "typescript": "^3.7.3"
+  },
+  "scripts": {
+    "clean": "rimraf ./build/",
+    "precompile": "yarn clean",
+    "compile": "waffle .waffle.json",
+    "pretest": "yarn compile"
+  },
+  "license": "GPL-3.0-or-later"
+}
