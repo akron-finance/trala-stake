@@ -11,7 +11,7 @@ import {IStakedTrala} from '../interfaces/IStakedTrala.sol';
 
 /**
  * @title StakedToken
- * @notice Contract to stake Trala token, tokenize the position and get reward, inheriting from a distribution manager contract
+ * @notice Contract to stake Trala token, tokenize the position and get reward
  **/
 contract StakedToken is IStakedTrala, ERC20, Ownable {
   using SafeMath for *;
@@ -22,9 +22,9 @@ contract StakedToken is IStakedTrala, ERC20, Ownable {
       uint256 cooldownStartTimestamp;
   }
 
-  uint256 internal constant ONE = 1e18; // 18 decimal places
+  uint256 internal constant ONE = 100;
   
-  uint256 public constant FIXED_APR = 0.1e18; // 10%
+  uint256 public constant FIXED_APR = 10; // 10%
 
   uint256 public constant COOLDOWN_SECONDS = 7 days;
   
@@ -37,17 +37,24 @@ contract StakedToken is IStakedTrala, ERC20, Ownable {
   /// @notice Address to pull from the reward, needs to have approved this contract
   address public immutable REWARD_VAULT;
 
-  mapping(address => mapping(uint256 => CooldownState)) public cooldownStates;
+  mapping(address => mapping(uint256 => CooldownState)) public cooldownStatesById;
   mapping(address => uint256) public cooldownAmounts;
   mapping(address => uint256) public cooldownStartIndices;
   mapping(address => uint256) public cooldownIndexCounts;
 
   mapping(address => uint256) public rewardToClaim;
-  mapping(address => uint256) public lastUpdateRewardTimestamps;
+  mapping(address => uint256) public lastUpdateTimestamps;
 
   uint256 public maxTotalSupply;
-  uint256 public startTimestamp;
+  
   uint256 public endTimestamp;
+
+  uint256 public aggregateRewardToDistribute;
+  uint256 public aggregateRewardToClaim;
+
+  uint256 public lastUpdateAggregateTimestamp;
+
+  bool public paused;
 
   event Staked(address indexed from, address indexed user, uint256 amount);
   event Redeem(address indexed from, address indexed to, uint256 amount, uint256 id);
@@ -69,23 +76,31 @@ contract StakedToken is IStakedTrala, ERC20, Ownable {
     transferOwnership(manager);
   }
 
-  function configureCampaign(uint256 rewardAmount) external onlyOwner {
-    if (TOKEN.balanceOf(REWARD_VAULT) < rewardAmount) revert('INSUFFICIENT_REWARD_AMOUNT');
-    maxTotalSupply = rewardAmount.mul(ONE).mul(365 days).div(FIXED_APR.mul(DURATION));
-    startTimestamp = block.timestamp;
+  function configureCampaign(uint256 _aggregateReward) external onlyOwner {
+    if (paused) revert('CONFIGURE_INVALID_WHEN_PAUSED');
+    if (TOKEN.balanceOf(REWARD_VAULT).sub(aggregateRewardToClaim) < _aggregateReward) {
+      revert('INSUFFICIENT_REWARD_AMOUNT');
+    }
+    
+    uint256 _aggregateRewardToDistribute = TOKEN.balanceOf(REWARD_VAULT).sub(aggregateRewardToClaim);
+    
+    aggregateRewardToDistribute = _aggregateRewardToDistribute;
+    
+    maxTotalSupply = _aggregateRewardToDistribute.mul(ONE).mul(365 days).div(FIXED_APR.mul(DURATION));
   }
 
   function stake(address user, uint256 amount) external override {
     require(amount != 0, 'INVALID_ZERO_AMOUNT');
+    
     if (totalSupply().add(amount) > maxTotalSupply) revert('MAX_TOTAL_SUPPLY_EXCEEDED');
-
+    
     IERC20(TOKEN).safeTransferFrom(msg.sender, address(this), amount);
 
-    uint256 accruedReward = _getAccruedReward(balanceOf(user), lastUpdateRewardTimestamps[user]);
-    if (accruedReward != 0) {
-      emit RewardAccrued(user, accruedReward);
-      rewardToClaim[user] = rewardToClaim[user].add(accruedReward);
-    }
+    uint256 currentTimestamp = block.timestamp > endTimestamp ? endTimestamp : block.timestamp;
+
+    _updateUnclaimedReward(user, balanceOf(user), currentTimestamp.sub(lastUpdateTimestamps[user]),true);
+    
+    _updateAggregateUnclaimedReward(totalSupply(), currentTimestamp.sub(lastUpdateAggregateTimestamp));
 
     _mint(user, amount);
 
@@ -98,30 +113,33 @@ contract StakedToken is IStakedTrala, ERC20, Ownable {
   function redeem(uint256 id, address to, uint256 amount) external override {
     require(amount != 0, 'INVALID_ZERO_AMOUNT');
 
-    uint256 cooldownStartTimestamp = cooldownStates[msg.sender][id].cooldownStartTimestamp;
+    uint256 cooldownStartTimestamp = cooldownStatesById[msg.sender][id].cooldownStartTimestamp;
+    
     require(block.timestamp > cooldownStartTimestamp.add(COOLDOWN_SECONDS), 'INSUFFICIENT_COOLDOWN');
 
     if (block.timestamp.sub(cooldownStartTimestamp.add(COOLDOWN_SECONDS)) > UNSTAKE_WINDOW) {
-      cooldownStates[msg.sender][id].amount = 0;
-      cooldownStates[msg.sender][id].cooldownStartTimestamp = 0;
+      delete cooldownStatesById[msg.sender][id];
       cooldownStartIndices[msg.sender] = id + 1;
       return;
     }
 
-    uint256 balancerOfUser = balanceOf(msg.sender);    
-
-    _updateCurrentUnclaimedReward(msg.sender, balancerOfUser, lastUpdateRewardTimestamps[msg.sender], true);
-
     cooldownAmounts[msg.sender] = cooldownAmounts[msg.sender].sub(amount, 'INVALID_AMOUNT');
 
-    _burn(msg.sender, amount);
+    uint256 currentTimestamp = block.timestamp > endTimestamp ? endTimestamp : block.timestamp;
+
+    uint256 balancerOfUser = balanceOf(msg.sender);    
 
     if (balancerOfUser.sub(amount) == 0) {
-      cooldownStates[msg.sender][id].amount = 0;
-      cooldownStates[msg.sender][id].cooldownStartTimestamp = 0;
+      delete cooldownStatesById[msg.sender][id];
       if (id == cooldownStartIndices[msg.sender]) cooldownStartIndices[msg.sender]++;
       if (id == cooldownIndexCounts[msg.sender]) cooldownIndexCounts[msg.sender]--;
     }
+
+    _updateUnclaimedReward(msg.sender, balancerOfUser, currentTimestamp.sub(lastUpdateTimestamps[msg.sender]), true);
+    
+    _updateAggregateUnclaimedReward(totalSupply(), currentTimestamp.sub(lastUpdateAggregateTimestamp));
+
+    _burn(msg.sender, amount);
 
     IERC20(TOKEN).safeTransfer(to, amount);
 
@@ -132,8 +150,9 @@ contract StakedToken is IStakedTrala, ERC20, Ownable {
    * @dev Activates the cooldown period to unstake
    * - It can't be called if the user is not staking
    **/
-  function cooldown(uint256 amount) external override returns (uint256 id) {
+  function requestCooldown(uint256 amount) external override returns (uint256 id) {
     uint256 balanceOfUser = balanceOf(msg.sender);
+    
     require(balanceOfUser != 0, 'INVALID_BALANCE_ON_COOLDOWN');
 
     amount = (amount > balanceOfUser - cooldownAmounts[msg.sender]) ? balanceOfUser - cooldownAmounts[msg.sender] : amount;
@@ -141,8 +160,8 @@ contract StakedToken is IStakedTrala, ERC20, Ownable {
     id = cooldownIndexCounts[msg.sender];
     cooldownIndexCounts[msg.sender]++;
     
-    cooldownStates[msg.sender][id].amount = amount;
-    cooldownStates[msg.sender][id].cooldownStartTimestamp = block.timestamp;
+    cooldownStatesById[msg.sender][id].amount = amount;
+    cooldownStatesById[msg.sender][id].cooldownStartTimestamp = block.timestamp;
 
     cooldownAmounts[msg.sender] = cooldownAmounts[msg.sender].add(amount);
 
@@ -151,12 +170,13 @@ contract StakedToken is IStakedTrala, ERC20, Ownable {
 
   /**
    * @dev Claims an `amount` of `TOKEN` to the address `to`
-   * @param to Address to stake for
-   * @param amount Amount to stake
    **/
   function claimReward(address to, uint256 amount) external override {
-    uint256 newTotalReward =
-      _updateCurrentUnclaimedReward(msg.sender, balanceOf(msg.sender), lastUpdateRewardTimestamps[msg.sender], false);
+    uint256 currentTimestamp = block.timestamp > endTimestamp ? endTimestamp : block.timestamp;
+
+    uint256 newTotalReward = _updateUnclaimedReward(
+      msg.sender, balanceOf(msg.sender), currentTimestamp.sub(lastUpdateTimestamps[msg.sender]), false
+    );
     uint256 amountToClaim = (amount == type(uint256).max) ? newTotalReward : amount;
 
     rewardToClaim[msg.sender] = newTotalReward.sub(amountToClaim, 'INVALID_AMOUNT');
@@ -169,13 +189,13 @@ contract StakedToken is IStakedTrala, ERC20, Ownable {
   /**
    * @dev Update the user state related with accrued reward
    **/
-  function _updateCurrentUnclaimedReward(
+  function _updateUnclaimedReward(
     address user, 
     uint256 balanceOfUser,
-    uint256 lastUpdateRewardTimestamp,
+    uint256 timeDelta,
     bool updateStorage
   ) internal returns (uint256) {
-    uint256 accruedReward = _getAccruedReward(balanceOfUser, lastUpdateRewardTimestamp);
+    uint256 accruedReward = _getAccruedReward(balanceOfUser, timeDelta);
     
     uint256 unclaimedReward = rewardToClaim[user].add(accruedReward);
 
@@ -184,28 +204,44 @@ contract StakedToken is IStakedTrala, ERC20, Ownable {
       emit RewardAccrued(user, accruedReward);
     }
 
+    lastUpdateTimestamps[user] = block.timestamp;
+
     return unclaimedReward;
   }
 
 
   /**
+   * @dev Update the aggregate state related with accrued reward
+   **/
+  function _updateAggregateUnclaimedReward(
+    uint256 aggregateBalance,
+    uint256 timeDelta
+  ) internal returns (uint256) {
+    uint256 accruedAggregateReward = _getAccruedReward(aggregateBalance, timeDelta);
+    
+    uint256 unclaimedAggregateReward = aggregateRewardToClaim.add(accruedAggregateReward);
+
+    if (accruedAggregateReward != 0) {
+      aggregateRewardToClaim = unclaimedAggregateReward;
+    }
+
+    lastUpdateAggregateTimestamp = block.timestamp;
+
+    return unclaimedAggregateReward;
+  }
+
+  /**
    * @dev Updates the state of user's accrued reward
    **/
-  function _getAccruedReward(
-    uint256 balanceOfUser,
-    uint256 lastUpdateRewardTimestamp
-  ) internal view returns (uint256) {
-    uint256 blockTimestamp = block.timestamp > endTimestamp ? endTimestamp : block.timestamp;
-    if (startTimestamp > lastUpdateRewardTimestamp) lastUpdateRewardTimestamp = startTimestamp;      
-    return balanceOfUser.mul(FIXED_APR).mul(blockTimestamp.sub(lastUpdateRewardTimestamp))
-      .div(ONE.mul(365 days));
+  function _getAccruedReward(uint256 balance, uint256 timeDelta) internal pure returns (uint256) {
+    return balance.mul(timeDelta).mul(FIXED_APR).div(ONE.mul(365 days));
   }
 
   /**
    * @dev Return the total reward pending to claim by a user
    */
   function getTotalRewardBalance(address user) external view returns (uint256) {
-    return rewardToClaim[user].add(_getAccruedReward(balanceOf(user), lastUpdateRewardTimestamps[user]));
+    return rewardToClaim[user].add(_getAccruedReward(balanceOf(user), lastUpdateTimestamps[user]));
   }
 
   /**
@@ -217,8 +253,8 @@ contract StakedToken is IStakedTrala, ERC20, Ownable {
 
     for (uint256 i = cooldownStartIndices[user]; i < cooldownIndexCounts[user]; i++) {
       if (
-        cooldownStates[user][i].amount != 0 
-          && block.timestamp <= cooldownStates[user][i].cooldownStartTimestamp.add(COOLDOWN_SECONDS).add(UNSTAKE_WINDOW)
+        cooldownStatesById[user][i].amount != 0 
+          && block.timestamp <= cooldownStatesById[user][i].cooldownStartTimestamp.add(COOLDOWN_SECONDS).add(UNSTAKE_WINDOW)
       ) {
         ids[cnt++] = i;
       }
@@ -226,6 +262,11 @@ contract StakedToken is IStakedTrala, ERC20, Ownable {
   }
   
   function getCooldownStateById(address user, uint256 id) external view returns (CooldownState memory) {
-    return cooldownStates[user][id];
+    return cooldownStatesById[user][id];
   }
+
+  function pause() external onlyOwner {
+    paused = true;
+  }
+
 }
