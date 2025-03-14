@@ -104,11 +104,9 @@ contract StakedToken is IStakedTrala, ERC20, Ownable {
    **/
   function redeem(uint256 id, address to, uint256 amount) external override {
     require(amount != 0, 'INVALID_ZERO_AMOUNT');
-
     uint256 cooldownStartTimestamp = cooldownStatesById[msg.sender][id].cooldownStartTimestamp;
-    
     require(block.timestamp > cooldownStartTimestamp.add(COOLDOWN_SECONDS), 'INSUFFICIENT_COOLDOWN');
-
+    
     if (block.timestamp.sub(cooldownStartTimestamp.add(COOLDOWN_SECONDS)) > UNSTAKE_WINDOW) {
       delete cooldownStatesById[msg.sender][id];
       cooldownStartIndices[msg.sender] = id + 1;
@@ -116,9 +114,7 @@ contract StakedToken is IStakedTrala, ERC20, Ownable {
     }
 
     cooldownAmounts[msg.sender] = cooldownAmounts[msg.sender].sub(amount, 'INVALID_AMOUNT');
-
     uint256 currentTimestamp = block.timestamp > endTimestamp ? endTimestamp : block.timestamp;
-
     uint256 balancerOfUser = balanceOf(msg.sender);    
 
     if (balancerOfUser.sub(amount) == 0) {
@@ -128,11 +124,8 @@ contract StakedToken is IStakedTrala, ERC20, Ownable {
     }
 
     _updateUnclaimedReward(msg.sender, balancerOfUser, currentTimestamp.sub(lastUpdateTimestamps[msg.sender]), true);
-    
     _updateAggregateUnclaimedReward(totalSupply(), currentTimestamp.sub(lastUpdateAggregateTimestamp));
-
     _burn(msg.sender, amount);
-
     IERC20(TOKEN).safeTransfer(to, amount);
 
     emit Redeem(msg.sender, to, amount, id);
@@ -144,17 +137,12 @@ contract StakedToken is IStakedTrala, ERC20, Ownable {
    **/
   function requestCooldown(uint256 amount) external override returns (uint256 id) {
     uint256 balanceOfUser = balanceOf(msg.sender);
-    
     require(balanceOfUser != 0, 'INVALID_BALANCE_ON_COOLDOWN');
-
     amount = (amount > balanceOfUser - cooldownAmounts[msg.sender]) ? balanceOfUser - cooldownAmounts[msg.sender] : amount;
-
     id = cooldownIndexCounts[msg.sender];
     cooldownIndexCounts[msg.sender]++;
-    
     cooldownStatesById[msg.sender][id].amount = amount;
     cooldownStatesById[msg.sender][id].cooldownStartTimestamp = block.timestamp;
-
     cooldownAmounts[msg.sender] = cooldownAmounts[msg.sender].add(amount);
 
     emit CooldownRequested(msg.sender, id);
@@ -165,15 +153,12 @@ contract StakedToken is IStakedTrala, ERC20, Ownable {
    **/
   function claimReward(address to, uint256 amount) external override {
     uint256 currentTimestamp = block.timestamp > endTimestamp ? endTimestamp : block.timestamp;
-
     uint256 newTotalReward = _updateUnclaimedReward(
       msg.sender, balanceOf(msg.sender), currentTimestamp.sub(lastUpdateTimestamps[msg.sender]), false
     );
     uint256 amountToClaim = (amount == type(uint256).max) ? newTotalReward : amount;
-
     rewardToClaim[msg.sender] = newTotalReward.sub(amountToClaim, 'INVALID_AMOUNT');
     aggregateRewardToClaim = aggregateRewardToClaim.sub(amountToClaim, 'INVALID_AMOUNT');
-
     TOKEN.safeTransferFrom(rewardVault, to, amountToClaim);
 
     emit RewardClaimed(msg.sender, to, amountToClaim);
