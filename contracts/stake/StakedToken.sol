@@ -260,6 +260,7 @@ contract StakedToken is IStakedTrala, ERC20, Ownable {
 
   function setRewardVault(address _rewardVault) external onlyOwner {
     rewardVault = _rewardVault;
+    delete aggregateRewardToClaim;
   }
 
 }
