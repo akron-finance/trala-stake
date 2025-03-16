@@ -22,7 +22,7 @@
     "ethereumjs-util": "^6.2.0",
     "ncp": "^2.0.0",
     "rimraf": "^3.0.0",
-    "solc": "0.6.12",
+    "solc": "0.8.20",
     "ts-node": "^8.5.4",
     "typescript": "^3.7.3"
   },

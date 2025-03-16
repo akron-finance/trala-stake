@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: agpl-3.0
-pragma solidity 0.6.12;
+pragma solidity 0.8.20;
 pragma experimental ABIEncoderV2;
 
 import {IERC20} from '@openzeppelin/contracts/token/ERC20/IERC20.sol';
@@ -16,8 +16,7 @@ contract StakedTrala is StakedToken {
     address manager,
     string memory name,
     string memory symbol
-  ) public
-    StakedToken(
+  ) StakedToken(
       token,
       rewardsVault,
       manager,

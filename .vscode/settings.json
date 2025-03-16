@@ -2,5 +2,5 @@
     "cSpell.words": [
         "CBBTC"
     ],
-    "solidity.compileUsingRemoteVersion": "v0.6.12+commit.27d51765"
+    "solidity.compileUsingRemoteVersion": "v0.8.20+commit.27d51765"
 }
