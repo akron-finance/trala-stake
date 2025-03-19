@@ -53,7 +53,7 @@ contract StakedToken is IStakedTrala, ERC20, Ownable {
 
   bool public paused;
 
-  event CampaignConfigured(uint256 maxRewardAmount, uint256 maxStakeAmount);
+  event CampaignStarted(uint256 maxRewardAmount, uint256 maxStakeAmount);
 
   event Staked(address indexed from, address indexed user, uint256 amount);
   event Redeem(address indexed from, address indexed to, uint256 amount, uint256 id);
@@ -65,9 +65,7 @@ contract StakedToken is IStakedTrala, ERC20, Ownable {
 
   event IndexUpdated(uint256 aggregateIndex);
 
-  event Paused();
-
-  event Unpaused();
+  event CampaignEnded();
 
   constructor(
     IERC20 token,
@@ -80,14 +78,14 @@ contract StakedToken is IStakedTrala, ERC20, Ownable {
     rewardVault = _rewardVault;
   }
 
-  function configureCampaign(uint256 _aggregateReward, uint256 _campaignDuration) external onlyOwner {
-    if (paused) revert('CONFIGURE_INVALID_WHEN_PAUSED');
+  function startCampaign(uint256 _aggregateReward, uint256 _campaignDuration) external onlyOwner {
+    if (paused) paused = false;
     uint256 aggregateRewardToDistribute = TOKEN.balanceOf(rewardVault) - aggregateRewardToClaim;
     if (aggregateRewardToDistribute < _aggregateReward) revert('INSUFFICIENT_REWARD_AMOUNT');
     campaignEndTimestamp = block.timestamp + _campaignDuration;
     campaignMaxTotalSupply = aggregateRewardToDistribute * ONE * 365 days / (FIXED_APR * _campaignDuration);
     if (totalSupply() > campaignMaxTotalSupply) revert('INSUFFICIENT_REWARD_AMOUNT');
-    emit CampaignConfigured(_aggregateReward, campaignMaxTotalSupply);
+    emit CampaignStarted(_aggregateReward, campaignMaxTotalSupply);
   }
 
   /**
@@ -250,15 +248,10 @@ contract StakedToken is IStakedTrala, ERC20, Ownable {
     return requestRedeemStatesById[user][id];
   }
 
-  function pause() external onlyOwner {
+  function endCampaign() external onlyOwner {
     campaignEndTimestamp = block.timestamp;
     paused = true;
-    emit Paused();
-  }
-
-  function unpause() external onlyOwner {
-    paused = false;
-    emit Unpaused();
+    emit CampaignEnded();
   }
 
   function setRewardVault(address _rewardVault) external onlyOwner {
