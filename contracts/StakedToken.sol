@@ -94,6 +94,9 @@ contract StakedToken is IStakedTrala, ERC20, Ownable {
     emit CampaignConfigured(_aggregateReward, campaignMaxTotalSupply);
   }
 
+  /**
+   * @dev Stakes token, and starts earning reward
+   **/
   function stake(address user, uint256 amount) external override {
     require(amount != 0, 'INVALID_ZERO_AMOUNT');
     if (totalSupply() + amount > campaignMaxTotalSupply) revert('MAX_TOTAL_SUPPLY_EXCEEDED');
@@ -107,7 +110,7 @@ contract StakedToken is IStakedTrala, ERC20, Ownable {
   }
 
   /**
-   * @dev Redeems staked tokens, and stop earning reward
+   * @dev Redeems staked token
    **/
   function redeem(uint256 id) external override {
     RequestRedeemState storage state = requestRedeemStatesById[msg.sender][id];
@@ -130,7 +133,7 @@ contract StakedToken is IStakedTrala, ERC20, Ownable {
   }
 
   /**
-   * @dev Activates the cooldown period to unstake
+   * @dev Activates the cooldown period to unstake, and stop earning reward.
    * - It can't be called if the user is not staking
    **/
   function requestRedeem(address to, uint256 amount) external override returns (uint256 id) {
