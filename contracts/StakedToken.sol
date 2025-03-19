@@ -30,8 +30,6 @@ contract StakedToken is IStakedTrala, ERC20, Ownable {
   
   uint256 public constant UNSTAKE_WINDOW = 10 minutes;
 
-  uint256 public constant DURATION = 90 days;
-
   IERC20 public immutable TOKEN;
 
   /// @notice Address to pull from the reward, needs to have approved this contract
@@ -46,6 +44,7 @@ contract StakedToken is IStakedTrala, ERC20, Ownable {
   mapping(address => uint256) public lastIndex;
 
   uint256 public campaignMaxTotalSupply;
+  uint256 public campaignStartTimestamp;
   uint256 public campaignEndTimestamp;
 
   uint256 public aggregateRewardToClaim;
@@ -66,6 +65,10 @@ contract StakedToken is IStakedTrala, ERC20, Ownable {
 
   event IndexUpdated(uint256 aggregateIndex);
 
+  event Paused();
+
+  event Unpaused();
+
   constructor(
     IERC20 token,
     address _rewardVault,
@@ -77,12 +80,17 @@ contract StakedToken is IStakedTrala, ERC20, Ownable {
     rewardVault = _rewardVault;
   }
 
-  function configureCampaign(uint256 _aggregateReward) external onlyOwner {
+  function configureCampaign(
+    uint256 _aggregateReward, 
+    uint256 _campaignStartBlockTimestamp, 
+    uint256 _campaignDuration
+  ) external onlyOwner {
     if (paused) revert('CONFIGURE_INVALID_WHEN_PAUSED');
     uint256 aggregateRewardToDistribute = TOKEN.balanceOf(rewardVault) - aggregateRewardToClaim;
     if (aggregateRewardToDistribute < _aggregateReward) revert('INSUFFICIENT_REWARD_AMOUNT');
-    campaignEndTimestamp = block.timestamp + DURATION;
-    campaignMaxTotalSupply = aggregateRewardToDistribute * ONE * 365 days / (FIXED_APR * DURATION);
+    campaignEndTimestamp = _campaignStartBlockTimestamp + _campaignDuration;
+    campaignMaxTotalSupply = aggregateRewardToDistribute * ONE * 365 days / (FIXED_APR * _campaignDuration);
+    if (totalSupply() > campaignMaxTotalSupply) revert('INSUFFICIENT_REWARD_AMOUNT');
     emit CampaignConfigured(_aggregateReward, campaignMaxTotalSupply);
   }
 
@@ -233,10 +241,7 @@ contract StakedToken is IStakedTrala, ERC20, Ownable {
     uint256 cnt;
 
     for (uint256 i = requestRedeemStartIndices[user]; i < requestRedeemIndexCounts[user]; i++) {
-      if (
-        requestRedeemStatesById[user][i].amount != 0 
-          && block.timestamp <= requestRedeemStatesById[user][i].cooldownStartTimestamp + COOLDOWN_SECONDS + UNSTAKE_WINDOW
-      ) {
+      if (requestRedeemStatesById[user][i].amount != 0) {
         ids[cnt++] = i;
       }
     }
@@ -247,7 +252,14 @@ contract StakedToken is IStakedTrala, ERC20, Ownable {
   }
 
   function pause() external onlyOwner {
+    campaignEndTimestamp = block.timestamp;
     paused = true;
+    emit Paused();
+  }
+
+  function unpause() external onlyOwner {
+    paused = false;
+    emit Unpaused();
   }
 
   function setRewardVault(address _rewardVault) external onlyOwner {
