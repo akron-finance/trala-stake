@@ -44,14 +44,11 @@ contract StakedToken is IStakedTrala, ERC20, Ownable {
   mapping(address => uint256) public lastIndex;
 
   uint256 public campaignMaxTotalSupply;
-  uint256 public campaignStartTimestamp;
   uint256 public campaignEndTimestamp;
 
   uint256 public aggregateRewardToClaim;
   uint256 public aggregateIndex;
   uint256 public lastUpdateAggregateTimestamp;
-
-  bool public paused;
 
   event CampaignStarted(uint256 maxRewardAmount, uint256 maxStakeAmount);
 
@@ -79,7 +76,6 @@ contract StakedToken is IStakedTrala, ERC20, Ownable {
   }
 
   function startCampaign(uint256 _aggregateReward, uint256 _campaignDuration) external onlyOwner {
-    if (paused) paused = false;
     uint256 aggregateRewardToDistribute = TOKEN.balanceOf(rewardVault) - aggregateRewardToClaim;
     if (aggregateRewardToDistribute < _aggregateReward) revert('INSUFFICIENT_REWARD_AMOUNT');
     campaignEndTimestamp = block.timestamp + _campaignDuration;
@@ -170,23 +166,17 @@ contract StakedToken is IStakedTrala, ERC20, Ownable {
     uint256 timeDelta,
     bool updateStorage
   ) internal returns (uint256) {
-    uint256 unclaimedReward;
-
     if (timeDelta != 0) {
       uint256 accruedReward = _getAccruedReward(balanceOfUser, aggregateIndex - lastIndex[user]);
-
-      unclaimedReward = rewardToClaim[user] + accruedReward;
-
       if (accruedReward != 0) {
-        if (updateStorage) rewardToClaim[user] = unclaimedReward;
+        if (updateStorage) rewardToClaim[user] += accruedReward;
         emit RewardAccrued(user, accruedReward);
       }
-
       lastIndex[user] = aggregateIndex;
       lastUpdateTimestamps[user] = block.timestamp;
     }
 
-    return unclaimedReward;
+    return rewardToClaim[user];
   }
 
 
@@ -198,22 +188,17 @@ contract StakedToken is IStakedTrala, ERC20, Ownable {
     uint256 aggregateBalance,
     uint256 timeDelta
   ) internal returns (uint256) {
-    uint256 unclaimedAggregateReward;
-
     if (timeDelta != 0) {
       uint256 accruedAggregateReward = aggregateBalance * timeDelta * FIXED_APR / (ONE * 365 days);
-      
-      unclaimedAggregateReward += aggregateRewardToClaim;
-
       if (accruedAggregateReward != 0) {
-        aggregateRewardToClaim = unclaimedAggregateReward;  
-        aggregateIndex += unclaimedAggregateReward * ONE / totalSupply();
+        aggregateRewardToClaim += accruedAggregateReward;  
+        aggregateIndex += aggregateRewardToClaim * ONE / totalSupply();
         lastUpdateAggregateTimestamp = block.timestamp;  
         emit IndexUpdated(aggregateIndex);
       }
     }
     
-    return unclaimedAggregateReward;
+    return aggregateRewardToClaim;
   }
 
   /**
@@ -250,7 +235,6 @@ contract StakedToken is IStakedTrala, ERC20, Ownable {
 
   function endCampaign() external onlyOwner {
     campaignEndTimestamp = block.timestamp;
-    paused = true;
     emit CampaignEnded();
   }
 
