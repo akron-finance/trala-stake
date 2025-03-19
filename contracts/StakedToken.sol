@@ -80,15 +80,11 @@ contract StakedToken is IStakedTrala, ERC20, Ownable {
     rewardVault = _rewardVault;
   }
 
-  function configureCampaign(
-    uint256 _aggregateReward, 
-    uint256 _campaignStartBlockTimestamp, 
-    uint256 _campaignDuration
-  ) external onlyOwner {
+  function configureCampaign(uint256 _aggregateReward, uint256 _campaignDuration) external onlyOwner {
     if (paused) revert('CONFIGURE_INVALID_WHEN_PAUSED');
     uint256 aggregateRewardToDistribute = TOKEN.balanceOf(rewardVault) - aggregateRewardToClaim;
     if (aggregateRewardToDistribute < _aggregateReward) revert('INSUFFICIENT_REWARD_AMOUNT');
-    campaignEndTimestamp = _campaignStartBlockTimestamp + _campaignDuration;
+    campaignEndTimestamp = block.timestamp + _campaignDuration;
     campaignMaxTotalSupply = aggregateRewardToDistribute * ONE * 365 days / (FIXED_APR * _campaignDuration);
     if (totalSupply() > campaignMaxTotalSupply) revert('INSUFFICIENT_REWARD_AMOUNT');
     emit CampaignConfigured(_aggregateReward, campaignMaxTotalSupply);
