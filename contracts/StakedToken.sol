@@ -16,19 +16,11 @@ import {IStakedTrala} from './interfaces/IStakedTrala.sol';
 contract StakedToken is IStakedTrala, ERC20, Ownable {
   using SafeERC20 for IERC20;
 
-  struct RequestRedeemState {
-      address recipient;
-      uint256 amount;
-      uint256 cooldownStartTimestamp;
-  }
-
   uint256 internal constant ONE = 1e18; // 100%
   
   uint256 public constant FIXED_APR = 0.1e18; // 10%
 
   uint256 public constant COOLDOWN_SECONDS = 1 minutes;
-  
-  uint256 public constant UNSTAKE_WINDOW = 10 minutes;
 
   IERC20 public immutable TOKEN;
 
@@ -76,10 +68,11 @@ contract StakedToken is IStakedTrala, ERC20, Ownable {
   }
 
   function startCampaign(uint256 _aggregateReward, uint256 _campaignDuration) external onlyOwner {
-    uint256 aggregateRewardToDistribute = TOKEN.balanceOf(rewardVault) - aggregateRewardToClaim;
-    if (aggregateRewardToDistribute < _aggregateReward) revert('INSUFFICIENT_REWARD_AMOUNT');
-    campaignEndTimestamp = block.timestamp + _campaignDuration;
-    campaignMaxTotalSupply = aggregateRewardToDistribute * ONE * 365 days / (FIXED_APR * _campaignDuration);
+    if (_aggregateReward < TOKEN.balanceOf(rewardVault) - aggregateRewardToClaim) revert('INSUFFICIENT_REWARD_AMOUNT');
+    uint256 _campaignEndTimestamp = block.timestamp + _campaignDuration;
+    if (_campaignEndTimestamp < campaignEndTimestamp) revert('ENDTIMESTAMP_LESS_THAN_EXISTING_ENDTIMESTAMP');
+    campaignEndTimestamp = _campaignEndTimestamp;
+    campaignMaxTotalSupply = _aggregateReward * ONE * 365 days / (FIXED_APR * _campaignDuration);
     if (totalSupply() > campaignMaxTotalSupply) revert('INSUFFICIENT_REWARD_AMOUNT');
     emit CampaignStarted(_aggregateReward, campaignMaxTotalSupply);
   }
@@ -218,21 +211,18 @@ contract StakedToken is IStakedTrala, ERC20, Ownable {
   /**
     * @dev Query withdrawal IDs that match active states.
     */
-  function getRequestRedeemStateIds(address user) external view returns (uint256[] memory ids) {
+  function getRequestRedeemStateIds(address user) external view returns (RequestRedeemState[] memory requestRedeemStates) {
     ids = new uint256[](requestRedeemIndexCounts[user] - requestRedeemStartIndices[user]);
     uint256 cnt;
 
     for (uint256 i = requestRedeemStartIndices[user]; i < requestRedeemIndexCounts[user]; i++) {
       if (requestRedeemStatesById[user][i].amount != 0) {
-        ids[cnt++] = i;
+        requestRedeemStates[cnt] = requestRedeemStatesById[user][cnt];
+        cnt++;
       }
     }
   }
   
-  function getRequestRedeemStateById(address user, uint256 id) external view returns (RequestRedeemState memory) {
-    return requestRedeemStatesById[user][id];
-  }
-
   function endCampaign() external onlyOwner {
     campaignEndTimestamp = block.timestamp;
     emit CampaignEnded();

@@ -3,6 +3,11 @@ pragma solidity >=0.8.20;
 pragma experimental ABIEncoderV2;
 
 interface IStakedToken {
+  struct RequestRedeemState {
+      address recipient;
+      uint256 amount;
+      uint256 cooldownStartTimestamp;
+  }
 
   function totalSupply() external view returns (uint256);
 
@@ -14,7 +19,5 @@ interface IStakedToken {
 
   function getTotalRewardsBalance(address user) external view returns (uint256);
 
-  function getRequestRedeemStateIds(address user) external view returns (uint256[] memory ids);
-
-  function getRequestRedeemStateById(address user, uint256 id) external view returns (uint256);
+  function getRequestRedeemStateIds(address user) external view returns (RequestRedeemState[] memory requestRedeemStates);
 }
