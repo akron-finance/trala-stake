@@ -73,7 +73,7 @@ contract StakedToken is IStakedTrala, ERC20, Ownable {
     if (_campaignEndTimestamp < campaignEndTimestamp) revert('ENDTIMESTAMP_LESS_THAN_EXISTING_ENDTIMESTAMP');
     campaignEndTimestamp = _campaignEndTimestamp;
     campaignMaxTotalSupply = _aggregateReward * ONE * 365 days / (FIXED_APR * _campaignDuration);
-    if (totalSupply() > campaignMaxTotalSupply) revert('INSUFFICIENT_REWARD_AMOUNT');
+    if (totalSupply() > campaignMaxTotalSupply) revert('INSUFFICIENT_CAMPAIGN_MAX_SUPPLY');
     emit CampaignStarted(_aggregateReward, campaignMaxTotalSupply);
   }
 
