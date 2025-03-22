@@ -1,28 +1,27 @@
 // SPDX-License-Identifier: agpl-3.0
 pragma solidity >=0.8.20;
-pragma experimental ABIEncoderV2;
 
 import {Ownable} from '@openzeppelin/contracts/access/Ownable.sol';
 import {ERC20} from '@openzeppelin/contracts/token/ERC20/ERC20.sol';
 import {IERC20} from '@openzeppelin/contracts/token/ERC20/IERC20.sol';
 import {SafeERC20} from '@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol';
 
-import {IStakedTrala} from './interfaces/IStakedTrala.sol';
+import {IStakedToken} from './interfaces/IStakedToken.sol';
 
 /**
  * @title StakedToken
  * @notice Contract to stake Trala token, tokenize the position and get reward
  **/
-contract StakedToken is IStakedTrala, ERC20, Ownable {
+contract StakedToken is IStakedToken, ERC20, Ownable {
   using SafeERC20 for IERC20;
 
   uint256 internal constant ONE = 1e18; // 100%
   
-  uint256 public constant FIXED_APR = 0.1e18; // 10%
+  uint256 public constant override FIXED_APR = 0.1e18; // 10%
 
-  uint256 public constant COOLDOWN_SECONDS = 1 minutes;
+  uint256 public constant override COOLDOWN_SECONDS = 1 minutes;
 
-  IERC20 public immutable TOKEN;
+  IERC20 public immutable override TOKEN;
 
   /// @notice Address to pull from the reward, needs to have approved this contract
   address public rewardVault;
@@ -35,8 +34,8 @@ contract StakedToken is IStakedTrala, ERC20, Ownable {
   mapping(address => uint256) public lastUpdateTimestamps;
   mapping(address => uint256) public lastIndex;
 
-  uint256 public campaignMaxTotalSupply;
-  uint256 public campaignEndTimestamp;
+  uint256 public override campaignMaxTotalSupply;
+  uint256 public override campaignEndTimestamp;
 
   uint256 public aggregateRewardToClaim;
   uint256 public aggregateIndex;
@@ -68,7 +67,7 @@ contract StakedToken is IStakedTrala, ERC20, Ownable {
   }
 
   function startCampaign(uint256 _aggregateReward, uint256 _campaignDuration) external onlyOwner {
-    if (_aggregateReward < TOKEN.balanceOf(rewardVault) - aggregateRewardToClaim) revert('INSUFFICIENT_REWARD_AMOUNT');
+    if (_aggregateReward > TOKEN.allowance(rewardVault, address(this)) - aggregateRewardToClaim) revert('INSUFFICIENT_REWARD_AMOUNT');
     uint256 _campaignEndTimestamp = block.timestamp + _campaignDuration;
     if (_campaignEndTimestamp < campaignEndTimestamp) revert('ENDTIMESTAMP_LESS_THAN_EXISTING_ENDTIMESTAMP');
     campaignEndTimestamp = _campaignEndTimestamp;
@@ -204,21 +203,26 @@ contract StakedToken is IStakedTrala, ERC20, Ownable {
   /**
    * @dev Return the total reward pending to claim by a user
    */
-  function getTotalRewardBalance(address user) external view returns (uint256) {
+  function getTotalRewardBalance(address user) external view override returns (uint256) {
     return rewardToClaim[user] + _getAccruedReward(balanceOf(user), aggregateIndex - lastIndex[user]);
   }
 
   /**
     * @dev Query withdrawal IDs that match active states.
     */
-  function getRequestRedeemStateIds(address user) external view returns (RequestRedeemState[] memory requestRedeemStates) {
-    ids = new uint256[](requestRedeemIndexCounts[user] - requestRedeemStartIndices[user]);
+  function getRequestRedeemIdsAndStates(address user) 
+    external 
+    view 
+    override 
+    returns (uint256[] memory ids, RequestRedeemState[] memory requestRedeemStates) 
+  {
+    
     uint256 cnt;
 
     for (uint256 i = requestRedeemStartIndices[user]; i < requestRedeemIndexCounts[user]; i++) {
       if (requestRedeemStatesById[user][i].amount != 0) {
         requestRedeemStates[cnt] = requestRedeemStatesById[user][cnt];
-        cnt++;
+        ids[cnt++];
       }
     }
   }
