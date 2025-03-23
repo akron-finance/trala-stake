@@ -49,7 +49,9 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
   event RewardAccrued(address user, uint256 amount);
   event RewardClaimed(address indexed from, address indexed to, uint256 amount);
 
-  event RedeemRequested(address indexed user, uint256 id);
+  event RedeemRequested(
+    address indexed from, address indexed to, uint256 amount, uint256 cooldownStartTimestamp, uint256 id
+  );
 
   event IndexUpdated(uint256 aggregateIndex);
 
@@ -81,14 +83,37 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
    **/
   function stake(address user, uint256 amount) external override {
     require(amount != 0, 'INVALID_ZERO_AMOUNT');
-    if (totalSupply() + amount > campaignMaxTotalSupply) revert('MAX_TOTAL_SUPPLY_EXCEEDED');
+    uint256 totalSupply = totalSupply();
+    if (totalSupply + amount > campaignMaxTotalSupply) revert('MAX_TOTAL_SUPPLY_EXCEEDED');
+    
     IERC20(TOKEN).safeTransferFrom(msg.sender, address(this), amount);
-    uint256 currentTimestamp = block.timestamp > campaignEndTimestamp ? campaignEndTimestamp : block.timestamp;
-    _updateUnclaimedReward(user, balanceOf(user), currentTimestamp - lastUpdateTimestamps[user], true);
-    _updateAggregateUnclaimedReward(totalSupply(), currentTimestamp - lastUpdateAggregateTimestamp);
+    
+    _updateUnclaimedReward(user, totalSupply);
+
     _mint(user, amount);
 
     emit Staked(msg.sender, user, amount);
+  }
+
+  /**
+   * @dev Activates the cooldown period to unstake, and stop earning reward.
+   * - It can't be called if the user is not staking
+   **/
+  function requestRedeem(address recipient, uint256 amount) external override returns (uint256 id) {
+    uint256 balanceOfUser = balanceOf(msg.sender);
+    require(balanceOfUser != 0, 'INVALID_BALANCE_ON_COOLDOWN');
+    amount = (amount > balanceOfUser) ? balanceOfUser : amount;
+    id = requestRedeemIndexCounts[msg.sender];
+    requestRedeemIndexCounts[msg.sender]++;
+    requestRedeemStatesById[msg.sender][id].recipient = recipient;
+    requestRedeemStatesById[msg.sender][id].amount = amount;
+    requestRedeemStatesById[msg.sender][id].cooldownStartTimestamp = block.timestamp;
+
+    _updateUnclaimedReward(msg.sender, totalSupply());
+
+    _burn(msg.sender, amount);
+
+    emit RedeemRequested(msg.sender, recipient, amount, block.timestamp, id);
   }
 
   /**
@@ -105,92 +130,71 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
     if (id == requestRedeemStartIndices[msg.sender]) requestRedeemStartIndices[msg.sender]++;
     if (id == requestRedeemIndexCounts[msg.sender]) requestRedeemIndexCounts[msg.sender]--;
   
-    uint256 currentTimestamp = block.timestamp > campaignEndTimestamp ? campaignEndTimestamp : block.timestamp;
-    _updateUnclaimedReward(msg.sender, balanceOf(msg.sender), currentTimestamp - lastUpdateTimestamps[msg.sender], true);
-    _updateAggregateUnclaimedReward(totalSupply(), currentTimestamp - lastUpdateAggregateTimestamp);
-    
     IERC20(TOKEN).safeTransfer(state.recipient, amount);
 
     emit Redeem(msg.sender, state.recipient, amount, id);
   }
 
   /**
-   * @dev Activates the cooldown period to unstake, and stop earning reward.
-   * - It can't be called if the user is not staking
-   **/
-  function requestRedeem(address to, uint256 amount) external override returns (uint256 id) {
-    uint256 balanceOfUser = balanceOf(msg.sender);
-    require(balanceOfUser != 0, 'INVALID_BALANCE_ON_COOLDOWN');
-    amount = (amount > balanceOfUser) ? balanceOfUser : amount;
-    id = requestRedeemIndexCounts[msg.sender];
-    requestRedeemIndexCounts[msg.sender]++;
-    requestRedeemStatesById[msg.sender][id].recipient = to;
-    requestRedeemStatesById[msg.sender][id].amount = amount;
-    requestRedeemStatesById[msg.sender][id].cooldownStartTimestamp = block.timestamp;
-
-    _burn(msg.sender, amount);
-
-    emit RedeemRequested(msg.sender, id);
-  }
-
-  /**
    * @dev Claims an `amount` of `TOKEN` to the address `to`
    **/
   function claimReward(address to, uint256 amount) external override {
-    uint256 currentTimestamp = block.timestamp > campaignEndTimestamp ? campaignEndTimestamp : block.timestamp;
-    uint256 newTotalReward = _updateUnclaimedReward(
-      msg.sender, balanceOf(msg.sender), currentTimestamp - lastUpdateTimestamps[msg.sender], false
-    );
+    
+    uint256 newTotalReward = getTotalRewardBalance(msg.sender);
     uint256 amountToClaim = amount > newTotalReward ? newTotalReward : amount;
     rewardToClaim[msg.sender] = newTotalReward - amountToClaim;
     aggregateRewardToClaim -= amountToClaim;
+
     TOKEN.safeTransferFrom(rewardVault, to, amountToClaim);
 
     emit RewardClaimed(msg.sender, to, amountToClaim);
   }
 
   /**
-   * @dev Update the user state related with accrued reward
-   **/
-  function _updateUnclaimedReward(
-    address user, 
-    uint256 balanceOfUser,
-    uint256 timeDelta,
-    bool updateStorage
-  ) internal returns (uint256) {
-    if (timeDelta != 0) {
-      uint256 accruedReward = _getAccruedReward(balanceOfUser, aggregateIndex - lastIndex[user]);
-      if (accruedReward != 0) {
-        if (updateStorage) rewardToClaim[user] += accruedReward;
-        emit RewardAccrued(user, accruedReward);
-      }
-      lastIndex[user] = aggregateIndex;
-      lastUpdateTimestamps[user] = block.timestamp;
-    }
-
-    return rewardToClaim[user];
+   * @dev Return the total reward pending to claim by a user
+   */
+  function getTotalRewardBalance(address user) public view override returns (uint256) {
+    (, uint256 newAggregateIndex) = _getAggregateStates(totalSupply());
+    return rewardToClaim[user] + _getAccruedReward(balanceOf(user), newAggregateIndex - lastIndex[user]);
   }
-
-
+  
 
   /**
-   * @dev Update the aggregate state related with accrued reward
+   * @dev Update the user state related with accrued reward
    **/
-  function _updateAggregateUnclaimedReward(
-    uint256 aggregateBalance,
-    uint256 timeDelta
-  ) internal returns (uint256) {
-    if (timeDelta != 0) {
-      uint256 accruedAggregateReward = aggregateBalance * timeDelta * FIXED_APR / (ONE * 365 days);
-      if (accruedAggregateReward != 0) {
-        aggregateRewardToClaim += accruedAggregateReward;  
-        aggregateIndex += aggregateRewardToClaim * ONE / totalSupply();
-        lastUpdateAggregateTimestamp = block.timestamp;  
-        emit IndexUpdated(aggregateIndex);
-      }
-    }
+  function _updateUnclaimedReward(address user, uint256 totalSupply) internal returns (uint256 newUnclaimedRewards) {
+    (uint256 newAggregateRewardToClaim, uint256 newAggregateIndex) = _getAggregateStates(totalSupply);
     
-    return aggregateRewardToClaim;
+    if (newAggregateIndex != aggregateIndex) {
+      aggregateRewardToClaim = newAggregateRewardToClaim;
+      aggregateIndex = newAggregateIndex;
+      lastUpdateAggregateTimestamp = block.timestamp;
+      emit IndexUpdated(aggregateIndex);
+    }
+
+    uint256 accruedReward = _getAccruedReward(balanceOf(user), newAggregateIndex - lastIndex[user]);
+    newUnclaimedRewards = rewardToClaim[user] + accruedReward;
+    
+    if (accruedReward != 0) {
+      rewardToClaim[user] = newUnclaimedRewards;
+      lastIndex[user] = newAggregateIndex;
+      lastUpdateTimestamps[user] = block.timestamp;
+      emit RewardAccrued(user, accruedReward);
+    }
+  }
+
+  function _getAggregateStates(
+    uint256 aggregateBalance
+  ) internal view returns (uint256 newAggregateRewardToClaim, uint256 newAggregateIndex) {
+    uint256 currentTimestamp = block.timestamp > campaignEndTimestamp ? campaignEndTimestamp : block.timestamp;
+    uint256 timeDelta = currentTimestamp - lastUpdateAggregateTimestamp;
+    
+    if (aggregateBalance == 0 || timeDelta == 0) return (aggregateRewardToClaim, aggregateIndex);
+    
+    return(
+      aggregateBalance * timeDelta * FIXED_APR / (ONE * 365 days),
+      newAggregateIndex += aggregateRewardToClaim * ONE / totalSupply()
+    );
   }
 
   /**
@@ -198,13 +202,6 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
    **/
   function _getAccruedReward(uint256 balance, uint256 indexDelta) internal pure returns (uint256) {
     return balance * indexDelta / ONE;
-  }
-
-  /**
-   * @dev Return the total reward pending to claim by a user
-   */
-  function getTotalRewardBalance(address user) external view override returns (uint256) {
-    return rewardToClaim[user] + _getAccruedReward(balanceOf(user), aggregateIndex - lastIndex[user]);
   }
 
   /**
