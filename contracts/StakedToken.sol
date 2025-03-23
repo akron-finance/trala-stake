@@ -31,14 +31,14 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
   mapping(address => uint256) public requestRedeemIndexCounts;
 
   mapping(address => uint256) public rewardToClaim;
-  mapping(address => uint256) public lastUpdateTimestamps;
-  mapping(address => uint256) public lastIndex;
 
   uint256 public override campaignMaxTotalSupply;
   uint256 public override campaignEndTimestamp;
+  uint256 public override index;
 
-  uint256 public aggregateIndex;
-  uint256 public lastUpdateAggregateTimestamp;
+  mapping(address => uint256) private _lastUpdateTimestampOfUser;
+  mapping(address => uint256) private _lastIndexOfUser;
+  uint256 private _lastIndexUpdateTimestamp;
 
   event CampaignStarted(uint256 maxRewardAmount, uint256 maxStakeAmount);
 
@@ -52,7 +52,7 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
     address indexed from, address indexed to, uint256 amount, uint256 cooldownStartTimestamp, uint256 id
   );
 
-  event IndexUpdated(uint256 aggregateIndex);
+  event IndexUpdated(uint256 index);
 
   event CampaignEnded();
 
@@ -67,28 +67,29 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
     REWARD_VAULT = _rewardVault;
   }
 
-  function startCampaign(uint256 _aggregateReward, uint256 _campaignDuration) external onlyOwner {
+  function startCampaign(uint256 maxTotalReward, uint256 duration) external onlyOwner {
     uint256 totalSupply = totalSupply();
-    if (_aggregateReward > TOKEN.allowance(REWARD_VAULT, address(this)) - _getAggregateIndex(totalSupply) * totalSupply) 
+    if (maxTotalReward > TOKEN.allowance(REWARD_VAULT, address(this)) - _getIndex(totalSupply) * totalSupply) 
       revert('INSUFFICIENT_CAMPAIGN_REWARD_AMOUNT');
     
-    uint256 _campaignEndTimestamp = block.timestamp + _campaignDuration;
+    uint256 _campaignEndTimestamp = block.timestamp + duration;
     if (_campaignEndTimestamp < campaignEndTimestamp) revert('INVALID_CAMPAIGN_ENDTIMESTAMP');
     campaignEndTimestamp = _campaignEndTimestamp;
 
-    campaignMaxTotalSupply = _aggregateReward * ONE * 365 days / (FIXED_APR * _campaignDuration);
+    campaignMaxTotalSupply = maxTotalReward * ONE * 365 days / (FIXED_APR * duration);
     if (totalSupply > campaignMaxTotalSupply) revert('INSUFFICIENT_CAMPAIGN_MAX_SUPPLY');
 
-    emit CampaignStarted(_aggregateReward, campaignMaxTotalSupply);
+    emit CampaignStarted(maxTotalReward, campaignMaxTotalSupply);
   }
 
   /**
    * @dev Stakes token, and starts earning reward
    **/
   function stake(address user, uint256 amount) external override {
+    if (block.timestamp > campaignEndTimestamp) revert('INACTIVE_CAMPAIGN');
     require(amount != 0, 'INVALID_ZERO_AMOUNT');
     uint256 totalSupply = totalSupply();
-    if (totalSupply + amount > campaignMaxTotalSupply) revert('MAX_TOTAL_SUPPLY_EXCEEDED');
+    if (totalSupply + amount > campaignMaxTotalSupply) revert('CAMPAIGN_MAX_TOTAL_SUPPLY_EXCEEDED');
     
     IERC20(TOKEN).safeTransferFrom(msg.sender, address(this), amount);
     
@@ -142,57 +143,56 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
   /**
    * @dev Claims an `amount` of `TOKEN` to the address `to`
    **/
-  function claimReward(address to, uint256 amount) external override {
-    uint256 newTotalReward = getTotalRewardBalance(msg.sender);
-    uint256 amountToClaim = amount > newTotalReward ? newTotalReward : amount;
-    rewardToClaim[msg.sender] = newTotalReward - amountToClaim;
+  function claimReward(address recipient, uint256 amount) external override {
+    uint256 newTotalRewardBalance = getTotalRewardBalance(msg.sender);
+    uint256 amountToClaim = amount > newTotalRewardBalance ? newTotalRewardBalance : amount;
+    rewardToClaim[msg.sender] = newTotalRewardBalance - amountToClaim;
 
-    TOKEN.safeTransferFrom(REWARD_VAULT, to, amountToClaim);
+    TOKEN.safeTransferFrom(REWARD_VAULT, recipient, amountToClaim);
 
-    emit RewardClaimed(msg.sender, to, amountToClaim);
+    emit RewardClaimed(msg.sender, recipient, amountToClaim);
   }
 
   /**
    * @dev Return the total reward pending to claim by a user
    */
   function getTotalRewardBalance(address user) public view override returns (uint256) {
-    uint256 newAggregateIndex = _getAggregateIndex(totalSupply());
-    return rewardToClaim[user] + _getUserAccruedReward(balanceOf(user), newAggregateIndex - lastIndex[user]);
+    uint256 newIndex = _getIndex(totalSupply());
+    return rewardToClaim[user] + _getUserAccruedReward(balanceOf(user), newIndex - _lastIndexOfUser[user]);
   }
-  
 
   /**
    * @dev Update the user state related with accrued reward
    **/
   function _updateStates(address user, uint256 totalSupply) internal returns (uint256 newUnclaimedRewards) {
-    uint256 newAggregateIndex = _getAggregateIndex(totalSupply);
+    uint256 newIndex = _getIndex(totalSupply);
     
-    if (newAggregateIndex != aggregateIndex) {
-      aggregateIndex = newAggregateIndex;
-      lastUpdateAggregateTimestamp = block.timestamp;
-      emit IndexUpdated(aggregateIndex);
+    if (newIndex != index) {
+      index = newIndex;
+      _lastIndexUpdateTimestamp = block.timestamp;
+      emit IndexUpdated(index);
     }
 
-    uint256 accruedReward = _getUserAccruedReward(balanceOf(user), newAggregateIndex - lastIndex[user]);
+    uint256 accruedReward = _getUserAccruedReward(balanceOf(user), newIndex - _lastIndexOfUser[user]);
     newUnclaimedRewards = rewardToClaim[user] + accruedReward;
     
     if (accruedReward != 0) {
       rewardToClaim[user] = newUnclaimedRewards;
-      lastIndex[user] = newAggregateIndex;
-      lastUpdateTimestamps[user] = block.timestamp;
+      _lastIndexOfUser[user] = newIndex;
+      _lastUpdateTimestampOfUser[user] = block.timestamp;
       emit RewardAccrued(user, accruedReward);
     }
   }
 
-  function _getAggregateIndex(
+  function _getIndex(
     uint256 totalSupply
-  ) internal view returns (uint256 newAggregateIndex) {
+  ) internal view returns (uint256 newIndex) {
     uint256 timeDelta = (block.timestamp > campaignEndTimestamp ? campaignEndTimestamp : block.timestamp) 
-      - lastUpdateAggregateTimestamp;
+      - _lastIndexUpdateTimestamp;
     
-    if (totalSupply == 0 || timeDelta == 0) return aggregateIndex;
+    if (totalSupply == 0 || timeDelta == 0) return index;
 
-    return newAggregateIndex += timeDelta * FIXED_APR / 365 days;
+    return newIndex += timeDelta * FIXED_APR / 365 days;
   }
 
   /**
