@@ -69,7 +69,8 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
 
   function startCampaign(uint256 maxTotalReward, uint256 duration) external onlyOwner {
     uint256 totalSupply = totalSupply();
-    if (maxTotalReward > TOKEN.allowance(REWARD_VAULT, address(this)) - _getIndex(totalSupply) * totalSupply) 
+    if (maxTotalReward > TOKEN.allowance(REWARD_VAULT, address(this)) 
+      - _getIndex(block.timestamp > campaignEndTimestamp ? campaignEndTimestamp : block.timestamp, totalSupply) * totalSupply) 
       revert('INSUFFICIENT_CAMPAIGN_REWARD_AMOUNT');
     
     uint256 _campaignEndTimestamp = block.timestamp + duration;
@@ -81,19 +82,25 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
 
     emit CampaignStarted(maxTotalReward, campaignMaxTotalSupply);
   }
+  
+  function endCampaign() external onlyOwner {
+    campaignEndTimestamp = block.timestamp;
+    emit CampaignEnded();
+  }
 
   /**
    * @dev Stakes token, and starts earning reward
    **/
   function stake(address user, uint256 amount) external override {
-    if (block.timestamp > campaignEndTimestamp) revert('INACTIVE_CAMPAIGN');
+    uint256 currentTimestamp = block.timestamp > campaignEndTimestamp ? campaignEndTimestamp : block.timestamp;
+    if (currentTimestamp == campaignEndTimestamp) revert('INACTIVE_CAMPAIGN');
     require(amount != 0, 'INVALID_ZERO_AMOUNT');
     uint256 totalSupply = totalSupply();
     if (totalSupply + amount > campaignMaxTotalSupply) revert('CAMPAIGN_MAX_TOTAL_SUPPLY_EXCEEDED');
     
     IERC20(TOKEN).safeTransferFrom(msg.sender, address(this), amount);
     
-    _updateStates(user, totalSupply);
+    _updateStates(user, currentTimestamp, totalSupply);
 
     _mint(user, amount);
 
@@ -114,7 +121,11 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
     requestRedeemStatesById[msg.sender][id].amount = amount;
     requestRedeemStatesById[msg.sender][id].cooldownStartTimestamp = block.timestamp;
 
-    _updateStates(msg.sender, totalSupply());
+    _updateStates(
+      msg.sender, 
+      block.timestamp > campaignEndTimestamp ? campaignEndTimestamp : block.timestamp, 
+      totalSupply()
+    );
 
     _burn(msg.sender, amount);
 
@@ -154,55 +165,6 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
   }
 
   /**
-   * @dev Return the total reward pending to claim by a user
-   */
-  function getTotalRewardBalance(address user) public view override returns (uint256) {
-    uint256 newIndex = _getIndex(totalSupply());
-    return rewardToClaim[user] + _getUserAccruedReward(balanceOf(user), newIndex - _lastIndexOfUser[user]);
-  }
-
-  /**
-   * @dev Update the user state related with accrued reward
-   **/
-  function _updateStates(address user, uint256 totalSupply) internal returns (uint256 newUnclaimedRewards) {
-    uint256 newIndex = _getIndex(totalSupply);
-    
-    if (newIndex != index) {
-      index = newIndex;
-      _lastIndexUpdateTimestamp = block.timestamp;
-      emit IndexUpdated(index);
-    }
-
-    uint256 accruedReward = _getUserAccruedReward(balanceOf(user), newIndex - _lastIndexOfUser[user]);
-    newUnclaimedRewards = rewardToClaim[user] + accruedReward;
-    
-    if (accruedReward != 0) {
-      rewardToClaim[user] = newUnclaimedRewards;
-      _lastIndexOfUser[user] = newIndex;
-      _lastUpdateTimestampOfUser[user] = block.timestamp;
-      emit RewardAccrued(user, accruedReward);
-    }
-  }
-
-  function _getIndex(
-    uint256 totalSupply
-  ) internal view returns (uint256 newIndex) {
-    uint256 timeDelta = (block.timestamp > campaignEndTimestamp ? campaignEndTimestamp : block.timestamp) 
-      - _lastIndexUpdateTimestamp;
-    
-    if (totalSupply == 0 || timeDelta == 0) return index;
-
-    return newIndex += timeDelta * FIXED_APR / 365 days;
-  }
-
-  /**
-   * @dev Updates the state of user's accrued reward
-   **/
-  function _getUserAccruedReward(uint256 balance, uint256 indexDelta) internal pure returns (uint256) {
-    return balance * indexDelta / ONE;
-  }
-
-  /**
     * @dev Query withdrawal IDs that match active states.
     */
   function getRequestRedeemIdsAndStates(address user) 
@@ -221,10 +183,50 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
       }
     }
   }
-  
-  function endCampaign() external onlyOwner {
-    campaignEndTimestamp = block.timestamp;
-    emit CampaignEnded();
+
+  /**
+   * @dev Return the total reward pending to claim by a user
+   */
+  function getTotalRewardBalance(address user) public view override returns (uint256) {
+    uint256 newIndex = _getIndex(block.timestamp > campaignEndTimestamp ? campaignEndTimestamp : block.timestamp, totalSupply());
+    return rewardToClaim[user] + _getUserAccruedReward(balanceOf(user), newIndex - _lastIndexOfUser[user]);
   }
 
+  /**
+   * @dev Update the user state related with accrued reward
+   **/
+  function _updateStates(
+    address user, uint256 currentTimestamp, uint256 totalSupply
+  ) internal returns (uint256 newUnclaimedRewards) {
+    uint256 newIndex = _getIndex(currentTimestamp, totalSupply);
+    
+    if (newIndex != index) {
+      index = newIndex;
+      _lastIndexUpdateTimestamp = block.timestamp;
+      emit IndexUpdated(index);
+    }
+
+    uint256 accruedReward = _getUserAccruedReward(balanceOf(user), newIndex - _lastIndexOfUser[user]);
+    newUnclaimedRewards = rewardToClaim[user] + accruedReward;
+    
+    if (accruedReward != 0) {
+      rewardToClaim[user] = newUnclaimedRewards;
+      _lastIndexOfUser[user] = newIndex;
+      _lastUpdateTimestampOfUser[user] = block.timestamp;
+      emit RewardAccrued(user, accruedReward);
+    }
+  }
+
+  function _getIndex(uint256 currentTimestamp, uint256 totalSupply) internal view returns (uint256 newIndex) {
+    uint256 timeDelta = currentTimestamp - _lastIndexUpdateTimestamp;
+    if (totalSupply == 0 || timeDelta == 0) return index;
+    return newIndex += timeDelta * FIXED_APR / 365 days;
+  }
+
+  /**
+   * @dev Updates the state of user's accrued reward
+   **/
+  function _getUserAccruedReward(uint256 balance, uint256 indexDelta) internal pure returns (uint256) {
+    return balance * indexDelta / ONE;
+  }
 }
