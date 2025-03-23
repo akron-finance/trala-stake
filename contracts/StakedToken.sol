@@ -24,7 +24,7 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
   IERC20 public immutable override TOKEN;
 
   /// @notice Address to pull from the reward, needs to have approved this contract
-  address public rewardVault;
+  address public REWARD_VAULT;
 
   mapping(address => mapping(uint256 => RequestRedeemState)) public requestRedeemStatesById;
   mapping(address => uint256) public requestRedeemStartIndices;
@@ -37,7 +37,6 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
   uint256 public override campaignMaxTotalSupply;
   uint256 public override campaignEndTimestamp;
 
-  uint256 public aggregateRewardToClaim;
   uint256 public aggregateIndex;
   uint256 public lastUpdateAggregateTimestamp;
 
@@ -65,16 +64,21 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
     string memory symbol
   ) ERC20(name, symbol) Ownable(manager) {
     TOKEN = token;
-    rewardVault = _rewardVault;
+    REWARD_VAULT = _rewardVault;
   }
 
   function startCampaign(uint256 _aggregateReward, uint256 _campaignDuration) external onlyOwner {
-    if (_aggregateReward > TOKEN.allowance(rewardVault, address(this)) - aggregateRewardToClaim) revert('INSUFFICIENT_REWARD_AMOUNT');
+    uint256 totalSupply = totalSupply();
+    if (_aggregateReward > TOKEN.allowance(REWARD_VAULT, address(this)) - _getAggregateIndex(totalSupply) * totalSupply) 
+      revert('INSUFFICIENT_CAMPAIGN_REWARD_AMOUNT');
+    
     uint256 _campaignEndTimestamp = block.timestamp + _campaignDuration;
-    if (_campaignEndTimestamp < campaignEndTimestamp) revert('ENDTIMESTAMP_LESS_THAN_EXISTING_ENDTIMESTAMP');
+    if (_campaignEndTimestamp < campaignEndTimestamp) revert('INVALID_CAMPAIGN_ENDTIMESTAMP');
     campaignEndTimestamp = _campaignEndTimestamp;
+
     campaignMaxTotalSupply = _aggregateReward * ONE * 365 days / (FIXED_APR * _campaignDuration);
-    if (totalSupply() > campaignMaxTotalSupply) revert('INSUFFICIENT_CAMPAIGN_MAX_SUPPLY');
+    if (totalSupply > campaignMaxTotalSupply) revert('INSUFFICIENT_CAMPAIGN_MAX_SUPPLY');
+
     emit CampaignStarted(_aggregateReward, campaignMaxTotalSupply);
   }
 
@@ -88,7 +92,7 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
     
     IERC20(TOKEN).safeTransferFrom(msg.sender, address(this), amount);
     
-    _updateUnclaimedReward(user, totalSupply);
+    _updateStates(user, totalSupply);
 
     _mint(user, amount);
 
@@ -109,7 +113,7 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
     requestRedeemStatesById[msg.sender][id].amount = amount;
     requestRedeemStatesById[msg.sender][id].cooldownStartTimestamp = block.timestamp;
 
-    _updateUnclaimedReward(msg.sender, totalSupply());
+    _updateStates(msg.sender, totalSupply());
 
     _burn(msg.sender, amount);
 
@@ -139,13 +143,11 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
    * @dev Claims an `amount` of `TOKEN` to the address `to`
    **/
   function claimReward(address to, uint256 amount) external override {
-    
     uint256 newTotalReward = getTotalRewardBalance(msg.sender);
     uint256 amountToClaim = amount > newTotalReward ? newTotalReward : amount;
     rewardToClaim[msg.sender] = newTotalReward - amountToClaim;
-    aggregateRewardToClaim -= amountToClaim;
 
-    TOKEN.safeTransferFrom(rewardVault, to, amountToClaim);
+    TOKEN.safeTransferFrom(REWARD_VAULT, to, amountToClaim);
 
     emit RewardClaimed(msg.sender, to, amountToClaim);
   }
@@ -154,25 +156,24 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
    * @dev Return the total reward pending to claim by a user
    */
   function getTotalRewardBalance(address user) public view override returns (uint256) {
-    (, uint256 newAggregateIndex) = _getAggregateStates(totalSupply());
-    return rewardToClaim[user] + _getAccruedReward(balanceOf(user), newAggregateIndex - lastIndex[user]);
+    uint256 newAggregateIndex = _getAggregateIndex(totalSupply());
+    return rewardToClaim[user] + _getUserAccruedReward(balanceOf(user), newAggregateIndex - lastIndex[user]);
   }
   
 
   /**
    * @dev Update the user state related with accrued reward
    **/
-  function _updateUnclaimedReward(address user, uint256 totalSupply) internal returns (uint256 newUnclaimedRewards) {
-    (uint256 newAggregateRewardToClaim, uint256 newAggregateIndex) = _getAggregateStates(totalSupply);
+  function _updateStates(address user, uint256 totalSupply) internal returns (uint256 newUnclaimedRewards) {
+    uint256 newAggregateIndex = _getAggregateIndex(totalSupply);
     
     if (newAggregateIndex != aggregateIndex) {
-      aggregateRewardToClaim = newAggregateRewardToClaim;
       aggregateIndex = newAggregateIndex;
       lastUpdateAggregateTimestamp = block.timestamp;
       emit IndexUpdated(aggregateIndex);
     }
 
-    uint256 accruedReward = _getAccruedReward(balanceOf(user), newAggregateIndex - lastIndex[user]);
+    uint256 accruedReward = _getUserAccruedReward(balanceOf(user), newAggregateIndex - lastIndex[user]);
     newUnclaimedRewards = rewardToClaim[user] + accruedReward;
     
     if (accruedReward != 0) {
@@ -183,24 +184,21 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
     }
   }
 
-  function _getAggregateStates(
-    uint256 aggregateBalance
-  ) internal view returns (uint256 newAggregateRewardToClaim, uint256 newAggregateIndex) {
-    uint256 currentTimestamp = block.timestamp > campaignEndTimestamp ? campaignEndTimestamp : block.timestamp;
-    uint256 timeDelta = currentTimestamp - lastUpdateAggregateTimestamp;
+  function _getAggregateIndex(
+    uint256 totalSupply
+  ) internal view returns (uint256 newAggregateIndex) {
+    uint256 timeDelta = (block.timestamp > campaignEndTimestamp ? campaignEndTimestamp : block.timestamp) 
+      - lastUpdateAggregateTimestamp;
     
-    if (aggregateBalance == 0 || timeDelta == 0) return (aggregateRewardToClaim, aggregateIndex);
-    
-    return(
-      aggregateBalance * timeDelta * FIXED_APR / (ONE * 365 days),
-      newAggregateIndex += aggregateRewardToClaim * ONE / totalSupply()
-    );
+    if (totalSupply == 0 || timeDelta == 0) return aggregateIndex;
+
+    return newAggregateIndex += timeDelta * FIXED_APR / 365 days;
   }
 
   /**
    * @dev Updates the state of user's accrued reward
    **/
-  function _getAccruedReward(uint256 balance, uint256 indexDelta) internal pure returns (uint256) {
+  function _getUserAccruedReward(uint256 balance, uint256 indexDelta) internal pure returns (uint256) {
     return balance * indexDelta / ONE;
   }
 
@@ -229,8 +227,4 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
     emit CampaignEnded();
   }
 
-  function setRewardVault(address _rewardVault) external onlyOwner {
-    delete aggregateRewardToClaim;
-    rewardVault = _rewardVault;
-  }
 }
