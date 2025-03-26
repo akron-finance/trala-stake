@@ -27,18 +27,17 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
   address public REWARD_VAULT;
 
   mapping(address => mapping(uint256 => RequestRedeemState)) public requestRedeemStatesById;
-  mapping(address => uint256) public requestRedeemStartIndices;
-  mapping(address => uint256) public requestRedeemIndexCounts;
+  mapping(address => uint256) public requestRedeemStartIds;
+  mapping(address => uint256) public requestRedeemEndIds;
 
   mapping(address => uint256) public rewardToClaim;
 
   uint256 public override campaignMaxTotalSupply;
   uint256 public override campaignEndTimestamp;
-  uint256 public override index;
-
-  mapping(address => uint256) private _lastUpdateTimestampOfUser;
-  mapping(address => uint256) private _lastIndexOfUser;
-  uint256 private _lastIndexUpdateTimestamp;
+  
+  mapping(address => uint256) private _lastNormalizedIncome;
+  uint256 private _normalizedIncome;
+  uint256 private _lastNormalizedIncomeUpdateTimestamp;
 
   event CampaignStarted(uint256 maxRewardAmount, uint256 maxStakeAmount);
 
@@ -52,7 +51,7 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
     address indexed from, address indexed to, uint256 amount, uint256 cooldownStartTimestamp, uint256 id
   );
 
-  event IndexUpdated(uint256 index);
+  event NormalizedIncomeUpdated(uint256 newNormalizedIncome);
 
   event CampaignEnded();
 
@@ -70,7 +69,7 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
   function startCampaign(uint256 maxTotalReward, uint256 duration) external onlyOwner {
     uint256 totalSupply = totalSupply();
     if (maxTotalReward > TOKEN.allowance(REWARD_VAULT, address(this)) 
-      - _getIndex(block.timestamp > campaignEndTimestamp ? campaignEndTimestamp : block.timestamp, totalSupply) * totalSupply) 
+      - _getNormalizedIncome(block.timestamp > campaignEndTimestamp ? campaignEndTimestamp : block.timestamp, totalSupply) * totalSupply) 
       revert('INSUFFICIENT_CAMPAIGN_REWARD_AMOUNT');
     
     uint256 _campaignEndTimestamp = block.timestamp + duration;
@@ -115,8 +114,8 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
     uint256 balanceOfUser = balanceOf(msg.sender);
     require(balanceOfUser != 0, 'INVALID_BALANCE_ON_COOLDOWN');
     amount = (amount > balanceOfUser) ? balanceOfUser : amount;
-    id = requestRedeemIndexCounts[msg.sender];
-    requestRedeemIndexCounts[msg.sender]++;
+    id = requestRedeemEndIds[msg.sender];
+    requestRedeemEndIds[msg.sender]++;
     requestRedeemStatesById[msg.sender][id].recipient = recipient;
     requestRedeemStatesById[msg.sender][id].amount = amount;
     requestRedeemStatesById[msg.sender][id].cooldownStartTimestamp = block.timestamp;
@@ -143,8 +142,8 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
     if (block.timestamp < state.cooldownStartTimestamp + COOLDOWN_SECONDS) revert('COOLDOWN_NOT_FINISHED');
     
     state.amount = 0;
-    if (id == requestRedeemStartIndices[msg.sender]) requestRedeemStartIndices[msg.sender]++;
-    if (id == requestRedeemIndexCounts[msg.sender]) requestRedeemIndexCounts[msg.sender]--;
+    if (id == requestRedeemStartIds[msg.sender]) requestRedeemStartIds[msg.sender]++;
+    if (id == requestRedeemEndIds[msg.sender]) requestRedeemEndIds[msg.sender]--;
   
     IERC20(TOKEN).safeTransfer(state.recipient, amount);
 
@@ -173,23 +172,39 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
     override 
     returns (uint256[] memory ids, RequestRedeemState[] memory requestRedeemStates) 
   {
-    
     uint256 cnt;
-
-    for (uint256 i = requestRedeemStartIndices[user]; i < requestRedeemIndexCounts[user]; i++) {
-      if (requestRedeemStatesById[user][i].amount != 0) {
-        requestRedeemStates[cnt] = requestRedeemStatesById[user][cnt];
-        ids[cnt++];
-      }
+    for (uint256 i = requestRedeemStartIds[user]; i < requestRedeemEndIds[user]; i++) {
+        if (requestRedeemStatesById[user][i].amount != 0) {
+            cnt++;
+        }
     }
+
+    ids = new uint256[](cnt);
+    requestRedeemStates = new RequestRedeemState[](cnt);
+
+    cnt = 0;
+    for (uint256 i = requestRedeemStartIds[user]; i < requestRedeemEndIds[user]; i++) {
+        if (requestRedeemStatesById[user][i].amount != 0) {
+            requestRedeemStates[cnt] = requestRedeemStatesById[user][i];
+            ids[cnt] = i;
+            cnt++;
+        }
+    }
+  }
+
+  function getNormalizedIncome() public view override returns (uint256 newNormalizedIncome) {
+    return _getNormalizedIncome(block.timestamp > campaignEndTimestamp ? campaignEndTimestamp : block.timestamp, totalSupply());
   }
 
   /**
    * @dev Return the total reward pending to claim by a user
    */
   function getTotalRewardBalance(address user) public view override returns (uint256) {
-    uint256 newIndex = _getIndex(block.timestamp > campaignEndTimestamp ? campaignEndTimestamp : block.timestamp, totalSupply());
-    return rewardToClaim[user] + _getUserAccruedReward(balanceOf(user), newIndex - _lastIndexOfUser[user]);
+    return rewardToClaim[user] + _getUserAccruedReward(
+      balanceOf(user), 
+      _getNormalizedIncome(block.timestamp > campaignEndTimestamp ? campaignEndTimestamp : block.timestamp, totalSupply()) 
+        - _lastNormalizedIncome[user]
+    );
   }
 
   /**
@@ -198,35 +213,35 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
   function _updateStates(
     address user, uint256 currentTimestamp, uint256 totalSupply
   ) internal returns (uint256 newUnclaimedRewards) {
-    uint256 newIndex = _getIndex(currentTimestamp, totalSupply);
+    uint256 newNormalizedIncome = _getNormalizedIncome(currentTimestamp, totalSupply);
     
-    if (newIndex != index) {
-      index = newIndex;
-      _lastIndexUpdateTimestamp = block.timestamp;
-      emit IndexUpdated(index);
+    if (_normalizedIncome != newNormalizedIncome) {
+      _normalizedIncome = newNormalizedIncome;
+      emit NormalizedIncomeUpdated(newNormalizedIncome);
     }
 
-    uint256 accruedReward = _getUserAccruedReward(balanceOf(user), newIndex - _lastIndexOfUser[user]);
+    if (_lastNormalizedIncomeUpdateTimestamp != block.timestamp) _lastNormalizedIncomeUpdateTimestamp = block.timestamp;
+
+    uint256 accruedReward = _getUserAccruedReward(balanceOf(user), newNormalizedIncome - _lastNormalizedIncome[user]);
     newUnclaimedRewards = rewardToClaim[user] + accruedReward;
     
     if (accruedReward != 0) {
       rewardToClaim[user] = newUnclaimedRewards;
-      _lastIndexOfUser[user] = newIndex;
-      _lastUpdateTimestampOfUser[user] = block.timestamp;
+      _lastNormalizedIncome[user] = newNormalizedIncome;
       emit RewardAccrued(user, accruedReward);
     }
   }
 
-  function _getIndex(uint256 currentTimestamp, uint256 totalSupply) internal view returns (uint256 newIndex) {
-    uint256 timeDelta = currentTimestamp - _lastIndexUpdateTimestamp;
-    if (totalSupply == 0 || timeDelta == 0) return index;
-    return newIndex += timeDelta * FIXED_APR / 365 days;
+  function _getNormalizedIncome(uint256 currentTimestamp, uint256 totalSupply) internal view returns (uint256 newNormalizedIncome) {
+    uint256 timeDelta = currentTimestamp - _lastNormalizedIncomeUpdateTimestamp;
+    if (totalSupply == 0 || timeDelta == 0) return _normalizedIncome;
+    return _normalizedIncome + timeDelta * FIXED_APR / 365 days;
   }
 
   /**
    * @dev Updates the state of user's accrued reward
    **/
-  function _getUserAccruedReward(uint256 balance, uint256 indexDelta) internal pure returns (uint256) {
-    return balance * indexDelta / ONE;
+  function _getUserAccruedReward(uint256 balance, uint256 normalizedIncomeDelta) internal pure returns (uint256) {
+    return balance * normalizedIncomeDelta / ONE;
   }
 }

@@ -28,9 +28,9 @@ interface IStakedToken {
 
   function campaignEndTimestamp() external view returns (uint256);
 
-  function index() external view returns (uint256);
-
   function getTotalRewardBalance(address user) external view returns (uint256);
 
   function getRequestRedeemIdsAndStates(address user) external view returns (uint256[] memory ids, RequestRedeemState[] memory requestRedeemStates);
+
+  function getNormalizedIncome() external view returns (uint256);
 }
