@@ -103,7 +103,7 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
     
     IERC20(TOKEN).safeTransferFrom(msg.sender, address(this), amount);
     
-    _updateStates(staker, currentTimestamp, totalSupply);
+    _updateStates(staker, currentTimestamp, totalSupply, true);
 
     _mint(staker, amount);
 
@@ -127,7 +127,8 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
     _updateStates(
       msg.sender, 
       block.timestamp > campaignEndTimestamp ? campaignEndTimestamp : block.timestamp, 
-      totalSupply()
+      totalSupply(),
+      true
     );
 
     _burn(msg.sender, amount);
@@ -163,7 +164,8 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
     rewardToClaim[msg.sender] = _updateStates(
       msg.sender, 
       block.timestamp > campaignEndTimestamp ? campaignEndTimestamp : block.timestamp, 
-      totalSupply()
+      totalSupply(),
+      false
     ) - amountToClaim;
 
     TOKEN.safeTransferFrom(REWARD_VAULT, recipient, amountToClaim);
@@ -219,7 +221,7 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
    * @dev Update the user state related with accrued reward
    **/
   function _updateStates(
-    address user, uint256 currentTimestamp, uint256 totalSupply
+    address user, uint256 currentTimestamp, uint256 totalSupply, bool updateStorage
   ) internal returns (uint256 newUnclaimedRewards) {
     uint256 newNormalizedIncome = _getNormalizedIncome(currentTimestamp, totalSupply);
     
@@ -234,7 +236,7 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
     newUnclaimedRewards = rewardToClaim[user] + accruedReward;
     
     if (accruedReward != 0) {
-      rewardToClaim[user] = newUnclaimedRewards;
+      if (updateStorage) rewardToClaim[user] = newUnclaimedRewards;
       _lastNormalizedIncome[user] = newNormalizedIncome;
       emit RewardAccrued(user, accruedReward);
     }
