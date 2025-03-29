@@ -160,7 +160,11 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
   function claimReward(address recipient, uint256 amount) external override {
     uint256 newTotalRewardBalance = getTotalRewardBalance(msg.sender);
     uint256 amountToClaim = amount > newTotalRewardBalance ? newTotalRewardBalance : amount;
-    rewardToClaim[msg.sender] = newTotalRewardBalance - amountToClaim;
+    rewardToClaim[msg.sender] = _updateStates(
+      msg.sender, 
+      block.timestamp > campaignEndTimestamp ? campaignEndTimestamp : block.timestamp, 
+      totalSupply()
+    ) - amountToClaim;
 
     TOKEN.safeTransferFrom(REWARD_VAULT, recipient, amountToClaim);
 
