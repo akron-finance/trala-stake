@@ -41,14 +41,18 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
 
   event CampaignStarted(uint256 maxRewardAmount, uint256 maxStakeAmount);
 
-  event Staked(address indexed from, address indexed user, uint256 amount);
-  event Redeem(address indexed from, address indexed to, uint256 amount, uint256 id);
+  event Staked(address indexed sender, address indexed staker, uint256 amount);
+  event Redeem(address indexed sender, address indexed recipient, uint256 amount, uint256 id);
 
-  event RewardAccrued(address user, uint256 amount);
-  event RewardClaimed(address indexed from, address indexed to, uint256 amount);
+  event RewardAccrued(address sender, uint256 amount);
+  event RewardClaimed(address indexed sender, address indexed recipient, uint256 amount);
 
   event RedeemRequested(
-    address indexed from, address indexed to, uint256 amount, uint256 cooldownStartTimestamp, uint256 id
+    address indexed sender, 
+    address indexed recipient, 
+    uint256 amount, 
+    uint256 cooldownStartTimestamp, 
+    uint256 id
   );
 
   event NormalizedIncomeUpdated(uint256 newNormalizedIncome);
@@ -90,7 +94,7 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
   /**
    * @dev Stakes token, and starts earning reward
    **/
-  function stake(address user, uint256 amount) external override {
+  function stake(address staker, uint256 amount) external override {
     uint256 currentTimestamp = block.timestamp > campaignEndTimestamp ? campaignEndTimestamp : block.timestamp;
     if (currentTimestamp == campaignEndTimestamp) revert('INACTIVE_CAMPAIGN');
     require(amount != 0, 'INVALID_ZERO_AMOUNT');
@@ -99,11 +103,11 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
     
     IERC20(TOKEN).safeTransferFrom(msg.sender, address(this), amount);
     
-    _updateStates(user, currentTimestamp, totalSupply);
+    _updateStates(staker, currentTimestamp, totalSupply);
 
-    _mint(user, amount);
+    _mint(staker, amount);
 
-    emit Staked(msg.sender, user, amount);
+    emit Staked(msg.sender, staker, amount);
   }
 
   /**
