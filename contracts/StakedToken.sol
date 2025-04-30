@@ -19,7 +19,7 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
   
   uint256 public constant override FIXED_APR = 0.1e18; // 10%
 
-  uint256 public constant override COOLDOWN_SECONDS = 1 minutes;
+  uint256 public constant override COOLDOWN_SECONDS = 7 days;
 
   IERC20 public immutable override TOKEN;
 
