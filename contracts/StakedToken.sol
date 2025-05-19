@@ -24,7 +24,7 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
   IERC20 public immutable override TOKEN;
 
   /// @notice Address to pull from the reward, needs to have approved this contract
-  address public REWARD_VAULT;
+  address public rewardVault;
 
   mapping(address => mapping(uint256 => RequestRedeemState)) public requestRedeemStatesById;
   mapping(address => uint256) public requestRedeemStartIds;
@@ -47,6 +47,8 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
   event RewardAccrued(address sender, uint256 amount);
   event RewardClaimed(address indexed sender, address indexed recipient, uint256 amount);
 
+  event RewardVaultChanged(address _rewardVault);
+
   event RedeemRequested(
     address indexed sender, 
     address indexed recipient, 
@@ -60,19 +62,19 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
   event CampaignEnded();
 
   constructor(
-    IERC20 token,
+    IERC20 _token,
     address _rewardVault,
-    address manager,
-    string memory name,
-    string memory symbol
-  ) ERC20(name, symbol) Ownable(manager) {
-    TOKEN = token;
-    REWARD_VAULT = _rewardVault;
+    address _manager,
+    string memory _name,
+    string memory _symbol
+  ) ERC20(_name, _symbol) Ownable(_manager) {
+    TOKEN = _token;
+    rewardVault = _rewardVault;
   }
 
   function startCampaign(uint256 maxTotalReward, uint256 duration) external onlyOwner {
     uint256 totalSupply = totalSupply();
-    if (maxTotalReward > TOKEN.allowance(REWARD_VAULT, address(this)) 
+    if (maxTotalReward > TOKEN.allowance(rewardVault, address(this)) 
       - _getNormalizedIncome(block.timestamp > campaignEndTimestamp ? campaignEndTimestamp : block.timestamp, totalSupply) * totalSupply) 
       revert('INSUFFICIENT_CAMPAIGN_REWARD_AMOUNT');
     
@@ -168,9 +170,18 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
       false
     ) - amountToClaim;
 
-    TOKEN.safeTransferFrom(REWARD_VAULT, recipient, amountToClaim);
+    TOKEN.safeTransferFrom(rewardVault, recipient, amountToClaim);
 
     emit RewardClaimed(msg.sender, recipient, amountToClaim);
+  }
+
+  /**
+   * @dev Sets an `amount` of `TOKEN` to the address `to`
+   **/
+  function setRewardVault(address _rewardVault) external onlyOwner {
+    rewardVault = _rewardVault;
+
+    emit RewardVaultChanged(_rewardVault);
   }
 
   /**
