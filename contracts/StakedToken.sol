@@ -206,7 +206,7 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
     override 
     returns (uint256[] memory ids, RequestRedeemState[] memory requestRedeemStates) 
   {
-    uint256 cnt = requestRedeemCounts[msg.sender]; // N6 
+    uint256 cnt = requestRedeemCounts[user]; // N6 
     
     // for (uint256 i = requestRedeemStartIds[user]; i < requestRedeemEndIds[user]; i++) {
     //     if (requestRedeemStatesById[user][i].amount != 0) {
