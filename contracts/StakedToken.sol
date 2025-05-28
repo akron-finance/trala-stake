@@ -173,6 +173,9 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
   function claimReward(address recipient, uint256 amount) external override {
     uint256 newTotalRewardBalance = getTotalRewardBalance(msg.sender);
     uint256 amountToClaim = amount > newTotalRewardBalance ? newTotalRewardBalance : amount;
+
+    if (amountToClaim == 0) revert ('ZERO_AMOUNT_TO_CLAIM');
+
     rewardToClaim[msg.sender] = _updateStates(
       msg.sender, 
       block.timestamp > campaignEndTimestamp ? campaignEndTimestamp : block.timestamp, 
