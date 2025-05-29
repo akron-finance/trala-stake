@@ -39,7 +39,7 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
   mapping(address => uint256) private _lastNormalizedIncome;
   uint256 private _normalizedIncome;
   uint256 private _lastNormalizedIncomeUpdateTimestamp;
-  uint256 private _claimedReward; // N5
+  uint256 private _claimedReward; 
 
   event CampaignStarted(uint256 maxRewardAmount, uint256 maxStakeAmount);
 
@@ -80,8 +80,8 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
     if (
       maxTotalReward > TOKEN.allowance(rewardVault, address(this)) - _getNormalizedIncome(
         block.timestamp > campaignEndTimestamp ? campaignEndTimestamp : block.timestamp, totalSupply
-      ) * totalSupply / ONE // N2
-        - _claimedReward // N5
+      ) * totalSupply / ONE
+        - _claimedReward 
     ) 
       revert('INSUFFICIENT_CAMPAIGN_REWARD_AMOUNT');
     
@@ -129,7 +129,7 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
     amount = (amount > balanceOfUser) ? balanceOfUser : amount;
     id = requestRedeemEndIds[msg.sender];
     requestRedeemEndIds[msg.sender]++;
-    requestRedeemCounts[msg.sender]++; // N6 
+    requestRedeemCounts[msg.sender]++; 
     requestRedeemStatesById[msg.sender][id].recipient = recipient;
     requestRedeemStatesById[msg.sender][id].amount = amount;
     requestRedeemStatesById[msg.sender][id].cooldownStartTimestamp = block.timestamp;
@@ -157,9 +157,8 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
     if (block.timestamp < state.cooldownStartTimestamp + COOLDOWN_SECONDS) revert('COOLDOWN_NOT_FINISHED');
     
     state.amount = 0;
-    requestRedeemCounts[msg.sender]--; // N6 
+    requestRedeemCounts[msg.sender]--;
     if (id == requestRedeemStartIds[msg.sender]) requestRedeemStartIds[msg.sender]++;
-    // if (id == requestRedeemEndIds[msg.sender]) requestRedeemEndIds[msg.sender]--; // N3 . will delete
     
   
     IERC20(TOKEN).safeTransfer(state.recipient, amount);
@@ -183,7 +182,7 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
       false
     ) - amountToClaim;
 
-    _claimedReward += amountToClaim; // N5
+    _claimedReward += amountToClaim;
 
     TOKEN.safeTransferFrom(rewardVault, recipient, amountToClaim);
 
@@ -209,14 +208,7 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
     override 
     returns (uint256[] memory ids, RequestRedeemState[] memory requestRedeemStates) 
   {
-    uint256 cnt = requestRedeemCounts[user]; // N6 
-    
-    // for (uint256 i = requestRedeemStartIds[user]; i < requestRedeemEndIds[user]; i++) {
-    //     if (requestRedeemStatesById[user][i].amount != 0) {
-    //         cnt++;
-    //     }
-    // }  
-    // N6. will delete.
+    uint256 cnt = requestRedeemCounts[user];
 
     ids = new uint256[](cnt);
     requestRedeemStates = new RequestRedeemState[](cnt);
@@ -260,8 +252,7 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
     }
 
     if (_lastNormalizedIncomeUpdateTimestamp != block.timestamp)
-      _lastNormalizedIncomeUpdateTimestamp = currentTimestamp; // N1
-      // _lastNormalizedIncomeUpdateTimestamp = block.timestamp;
+      _lastNormalizedIncomeUpdateTimestamp = currentTimestamp;
       
     uint256 accruedReward = _getUserAccruedReward(balanceOf(user), newNormalizedIncome - _lastNormalizedIncome[user]);
     newUnclaimedRewards = rewardToClaim[user] + accruedReward;
