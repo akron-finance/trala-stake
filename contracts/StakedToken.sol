@@ -16,12 +16,12 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
   using SafeERC20 for IERC20;
 
   uint256 internal constant ONE = 1e18; // 100%
-  
-  uint256 public constant override FIXED_APR = 0.1e18; // 10%
 
   uint256 public constant override COOLDOWN_SECONDS = 7 days;
 
   IERC20 public immutable override TOKEN;
+
+  uint256 public override fixedAPR; // 10% = 10e16;
 
   /// @notice Address to pull from the reward, needs to have approved this contract
   address public rewardVault;
@@ -75,8 +75,15 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
     rewardVault = _rewardVault;
   }
 
-  function startCampaign(uint256 maxTotalReward, uint256 duration) external onlyOwner {
+  function startCampaign(
+    uint256 maxTotalReward, 
+    uint256 duration, 
+    uint256 _fixedAPR
+  ) external onlyOwner {
+    fixedAPR = _fixedAPR;
+
     uint256 totalSupply = totalSupply();
+
     if (
       maxTotalReward > TOKEN.allowance(rewardVault, address(this)) - _getNormalizedIncome(
         block.timestamp > campaignEndTimestamp ? campaignEndTimestamp : block.timestamp, totalSupply
@@ -86,10 +93,10 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
       revert('INSUFFICIENT_CAMPAIGN_REWARD_AMOUNT');
     
     uint256 _campaignEndTimestamp = block.timestamp + duration;
-    if (_campaignEndTimestamp < campaignEndTimestamp) revert('INVALID_CAMPAIGN_ENDTIMESTAMP');
+    if (_campaignEndTimestamp < campaignEndTimestamp) revert('INVALID_CAMPAIGN_END_TIMESTAMP');
     campaignEndTimestamp = _campaignEndTimestamp;
 
-    campaignMaxTotalSupply = maxTotalReward * ONE * 365 days / (FIXED_APR * duration);
+    campaignMaxTotalSupply = maxTotalReward * ONE * 365 days / (fixedAPR * duration);
     if (totalSupply > campaignMaxTotalSupply) revert('INSUFFICIENT_CAMPAIGN_MAX_SUPPLY');
 
     emit CampaignStarted(maxTotalReward, campaignMaxTotalSupply);
@@ -267,7 +274,7 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
   function _getNormalizedIncome(uint256 currentTimestamp, uint256 totalSupply) internal view returns (uint256 newNormalizedIncome) {
     uint256 timeDelta = currentTimestamp - _lastNormalizedIncomeUpdateTimestamp;
     if (totalSupply == 0 || timeDelta == 0) return _normalizedIncome;
-    return _normalizedIncome + timeDelta * FIXED_APR / 365 days;
+    return _normalizedIncome + timeDelta * fixedAPR / 365 days;
   }
 
   /**

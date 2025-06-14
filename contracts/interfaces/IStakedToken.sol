@@ -18,7 +18,7 @@ interface IStakedToken {
 
   function claimReward(address to, uint256 amount) external;
 
-  function FIXED_APR() external view returns (uint256);
+  function fixedAPR() external view returns (uint256);
 
   function COOLDOWN_SECONDS() external view returns (uint256);
 
