@@ -260,15 +260,15 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
       emit NormalizedIncomeUpdated(newNormalizedIncome);
     }
 
+    if (_lastNormalizedIncome[user] != newNormalizedIncome) {
+      _lastNormalizedIncome[user] = newNormalizedIncome;
+    }
+
     if (_lastNormalizedIncomeUpdateTimestamp != block.timestamp)
       _lastNormalizedIncomeUpdateTimestamp = currentTimestamp;
       
     uint256 accruedReward = _getUserAccruedReward(balanceOf(user), newNormalizedIncome - _lastNormalizedIncome[user]);
     newUnclaimedRewards = rewardToClaim[user] + accruedReward;
-    
-    if (_lastNormalizedIncome[user] != newNormalizedIncome) {
-      _lastNormalizedIncome[user] = newNormalizedIncome;
-    }
 
     if (accruedReward != 0) {
       if (updateStorage) rewardToClaim[user] = newUnclaimedRewards;
