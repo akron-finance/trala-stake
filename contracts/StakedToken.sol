@@ -119,6 +119,8 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
     
     IERC20(TOKEN).safeTransferFrom(msg.sender, address(this), amount);
     
+    // if (_lastNormalizedIncome[staker] == 0) _lastNormalizedIncome[staker] = _normalizedIncome;
+
     _updateStates(staker, currentTimestamp, totalSupply, true);
 
     _mint(staker, amount);
@@ -264,9 +266,10 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
     uint256 accruedReward = _getUserAccruedReward(balanceOf(user), newNormalizedIncome - _lastNormalizedIncome[user]);
     newUnclaimedRewards = rewardToClaim[user] + accruedReward;
     
+    _lastNormalizedIncome[user] = newNormalizedIncome;
+
     if (accruedReward != 0) {
       if (updateStorage) rewardToClaim[user] = newUnclaimedRewards;
-      _lastNormalizedIncome[user] = newNormalizedIncome;
       emit RewardAccrued(user, accruedReward);
     }
   }
