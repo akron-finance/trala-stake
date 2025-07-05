@@ -17,7 +17,7 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
 
   uint256 internal constant ONE = 1e18; // 100%
 
-  uint256 public constant override COOLDOWN_SECONDS = 7 days;
+  uint256 public constant override COOLDOWN_SECONDS = 10 minutes; // 7 days
 
   IERC20 public immutable override TOKEN;
 
@@ -35,10 +35,11 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
 
   uint256 public override campaignMaxTotalSupply;
   uint256 public override campaignEndTimestamp;
-  
+
   mapping(address => uint256) private _lastNormalizedIncome;
   uint256 private _normalizedIncome;
   uint256 private _lastNormalizedIncomeUpdateTimestamp;
+  uint256 private _totalReward;
   uint256 private _claimedReward; 
 
   event CampaignStarted(uint256 maxRewardAmount, uint256 maxStakeAmount);
@@ -76,50 +77,68 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
   }
 
   function startCampaign(
-    uint256 maxTotalReward, 
+  uint256 maxTotalReward, 
     uint256 duration, 
     uint256 _fixedAPR
   ) external onlyOwner {
-    fixedAPR = _fixedAPR;
-
     uint256 totalSupply = totalSupply();
 
-    if (
-      maxTotalReward > TOKEN.allowance(rewardVault, address(this)) - _getNormalizedIncome(
-        block.timestamp > campaignEndTimestamp ? campaignEndTimestamp : block.timestamp, totalSupply
-      ) * totalSupply / ONE
-        - _claimedReward 
-    ) 
+    uint256 newNormalizedIncome = _getNormalizedIncome(
+      block.timestamp > campaignEndTimestamp ? campaignEndTimestamp : block.timestamp, 
+      totalSupply
+    );
+    
+    _updateNormalizedIncome(newNormalizedIncome, totalSupply);
+    
+    if (maxTotalReward > TOKEN.allowance(rewardVault, address(this)) - (_totalReward - _claimedReward)) // fix
       revert('INSUFFICIENT_CAMPAIGN_REWARD_AMOUNT');
     
-    uint256 _campaignEndTimestamp = block.timestamp + duration;
-    if (_campaignEndTimestamp < campaignEndTimestamp) revert('INVALID_CAMPAIGN_END_TIMESTAMP');
-    campaignEndTimestamp = _campaignEndTimestamp;
-
+    fixedAPR = _fixedAPR;
+    
     campaignMaxTotalSupply = maxTotalReward * ONE * 365 days / (fixedAPR * duration);
+
     if (totalSupply > campaignMaxTotalSupply) revert('INSUFFICIENT_CAMPAIGN_MAX_SUPPLY');
+
+    if (_lastNormalizedIncomeUpdateTimestamp != block.timestamp) 
+      _lastNormalizedIncomeUpdateTimestamp = block.timestamp;
+
+    campaignEndTimestamp = block.timestamp + duration;
 
     emit CampaignStarted(maxTotalReward, campaignMaxTotalSupply);
   }
-  
+
   function endCampaign() external onlyOwner {
+    if (block.timestamp > campaignEndTimestamp) revert('CAMPAIGN_ALREADY_ENDED');
+    uint256 totalSupply = totalSupply();
+    uint256 newNormalizedIncome = _getNormalizedIncome(block.timestamp, totalSupply);
+    
+    _updateNormalizedIncome(newNormalizedIncome, totalSupply);
+
+    if (_lastNormalizedIncomeUpdateTimestamp != block.timestamp) 
+      _lastNormalizedIncomeUpdateTimestamp = block.timestamp;
+
+    fixedAPR = 0;
+    
     campaignEndTimestamp = block.timestamp;
+    
     emit CampaignEnded();
   }
 
   /**
-   * @dev Stakes token, and starts earning reward
-   **/
+    * @dev Stakes token, and starts earning reward
+    **/
   function stake(address staker, uint256 amount) external override {
     uint256 currentTimestamp = block.timestamp > campaignEndTimestamp ? campaignEndTimestamp : block.timestamp;
+    
     if (currentTimestamp == campaignEndTimestamp) revert('INACTIVE_CAMPAIGN');
+    
     require(amount != 0, 'INVALID_ZERO_AMOUNT');
+    
     uint256 totalSupply = totalSupply();
+
     if (totalSupply + amount > campaignMaxTotalSupply) revert('CAMPAIGN_MAX_TOTAL_SUPPLY_EXCEEDED');
     
     IERC20(TOKEN).safeTransferFrom(msg.sender, address(this), amount);
-    
-    // if (_lastNormalizedIncome[staker] == 0) _lastNormalizedIncome[staker] = _normalizedIncome;
 
     _updateStates(staker, currentTimestamp, totalSupply, true);
 
@@ -129,9 +148,9 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
   }
 
   /**
-   * @dev Activates the cooldown period to unstake, and stop earning reward.
-   * - It can't be called if the user is not staking
-   **/
+    * @dev Activates the cooldown period to unstake, and stop earning reward.
+    * - It can't be called if the user is not staking
+    **/
   function requestRedeem(address recipient, uint256 amount) external override returns (uint256 id) {
     uint256 balanceOfUser = balanceOf(msg.sender);
     require(balanceOfUser != 0, 'INVALID_BALANCE_ON_COOLDOWN');
@@ -143,12 +162,9 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
     requestRedeemStatesById[msg.sender][id].amount = amount;
     requestRedeemStatesById[msg.sender][id].cooldownStartTimestamp = block.timestamp;
 
-    _updateStates(
-      msg.sender, 
-      block.timestamp > campaignEndTimestamp ? campaignEndTimestamp : block.timestamp, 
-      totalSupply(),
-      true
-    );
+    uint256 currentTimestamp = block.timestamp > campaignEndTimestamp ? campaignEndTimestamp : block.timestamp;
+
+    _updateStates(msg.sender, currentTimestamp, totalSupply(), true);
 
     _burn(msg.sender, amount);
 
@@ -156,8 +172,8 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
   }
 
   /**
-   * @dev Redeems staked token
-   **/
+    * @dev Redeems staked token
+    **/
   function redeem(uint256 id) external override {
     RequestRedeemState storage state = requestRedeemStatesById[msg.sender][id];
     uint256 amount = state.amount;
@@ -169,27 +185,24 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
     requestRedeemCounts[msg.sender]--;
     if (id == requestRedeemStartIds[msg.sender]) requestRedeemStartIds[msg.sender]++;
     
-  
+
     IERC20(TOKEN).safeTransfer(state.recipient, amount);
 
     emit Redeem(msg.sender, state.recipient, amount, id);
   }
 
   /**
-   * @dev Claims an `amount` of `TOKEN` to the address `to`
-   **/
+    * @dev Claims an `amount` of `TOKEN` to the address `to`
+    **/
   function claimReward(address recipient, uint256 amount) external override {
     uint256 newTotalRewardBalance = getTotalRewardBalance(msg.sender);
     uint256 amountToClaim = amount > newTotalRewardBalance ? newTotalRewardBalance : amount;
 
     if (amountToClaim == 0) revert ('ZERO_AMOUNT_TO_CLAIM');
 
-    rewardToClaim[msg.sender] = _updateStates(
-      msg.sender, 
-      block.timestamp > campaignEndTimestamp ? campaignEndTimestamp : block.timestamp, 
-      totalSupply(),
-      false
-    ) - amountToClaim;
+    uint256 currentTimestamp = block.timestamp > campaignEndTimestamp ? campaignEndTimestamp : block.timestamp;
+
+    rewardToClaim[msg.sender] = _updateStates(msg.sender, currentTimestamp, totalSupply(), false) - amountToClaim;
 
     _claimedReward += amountToClaim;
 
@@ -199,8 +212,8 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
   }
 
   /**
-   * @dev Sets an `amount` of `TOKEN` to the address `to`
-   **/
+    * @dev Sets an `amount` of `TOKEN` to the address `to`
+    **/
   function setRewardVault(address _rewardVault) external onlyOwner {
     if (_rewardVault == address(0)) revert('ZERO_ADDRESS');
     rewardVault = _rewardVault;
@@ -237,10 +250,10 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
   }
 
   /**
-   * @dev Return the total reward pending to claim by a user
-   */
+    * @dev Return the total reward pending to claim by a user
+    */
   function getTotalRewardBalance(address user) public view override returns (uint256) {
-    return rewardToClaim[user] + _getUserAccruedReward(
+    return rewardToClaim[user] + _getAccruedReward(
       balanceOf(user), 
       _getNormalizedIncome(block.timestamp > campaignEndTimestamp ? campaignEndTimestamp : block.timestamp, totalSupply()) 
         - _lastNormalizedIncome[user]
@@ -248,31 +261,37 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
   }
 
   /**
-   * @dev Update the user state related with accrued reward
-   **/
+    * @dev Update the user state related with accrued reward
+    **/
   function _updateStates(
     address user, uint256 currentTimestamp, uint256 totalSupply, bool updateStorage
   ) internal returns (uint256 newUnclaimedRewards) {
     uint256 newNormalizedIncome = _getNormalizedIncome(currentTimestamp, totalSupply);
     
+    _updateNormalizedIncome(newNormalizedIncome, totalSupply);
+
+    if (_lastNormalizedIncomeUpdateTimestamp != currentTimestamp) 
+      _lastNormalizedIncomeUpdateTimestamp = currentTimestamp;
+          
+    if (_lastNormalizedIncome[user] != newNormalizedIncome) {
+      uint256 accruedReward = _getAccruedReward(balanceOf(user), newNormalizedIncome - _lastNormalizedIncome[user]);
+      
+      newUnclaimedRewards = rewardToClaim[user] + accruedReward;
+      
+      _lastNormalizedIncome[user] = newNormalizedIncome;
+      
+      if (accruedReward != 0) {
+        if (updateStorage) rewardToClaim[user] = newUnclaimedRewards;
+        emit RewardAccrued(user, accruedReward);
+      }
+    }
+  }
+
+  function _updateNormalizedIncome(uint256 newNormalizedIncome, uint256 totalSupply) internal {
     if (_normalizedIncome != newNormalizedIncome) {
+      _totalReward += _getAccruedReward(totalSupply, newNormalizedIncome - _normalizedIncome);
       _normalizedIncome = newNormalizedIncome;
       emit NormalizedIncomeUpdated(newNormalizedIncome);
-    }
-
-    if (_lastNormalizedIncome[user] != newNormalizedIncome) {
-      _lastNormalizedIncome[user] = newNormalizedIncome;
-    }
-
-    if (_lastNormalizedIncomeUpdateTimestamp != block.timestamp)
-      _lastNormalizedIncomeUpdateTimestamp = currentTimestamp;
-      
-    uint256 accruedReward = _getUserAccruedReward(balanceOf(user), newNormalizedIncome - _lastNormalizedIncome[user]);
-    newUnclaimedRewards = rewardToClaim[user] + accruedReward;
-
-    if (accruedReward != 0) {
-      if (updateStorage) rewardToClaim[user] = newUnclaimedRewards;
-      emit RewardAccrued(user, accruedReward);
     }
   }
 
@@ -283,9 +302,10 @@ contract StakedToken is IStakedToken, ERC20, Ownable {
   }
 
   /**
-   * @dev Updates the state of user's accrued reward
-   **/
-  function _getUserAccruedReward(uint256 balance, uint256 normalizedIncomeDelta) internal pure returns (uint256) {
+    * @dev Updates the state of user's accrued reward
+    **/
+  function _getAccruedReward(uint256 balance, uint256 normalizedIncomeDelta) internal pure returns (uint256) {
     return balance * normalizedIncomeDelta / ONE;
   }
+
 }
